@@ -10,3 +10,7 @@ wheels/
 .venv
 
 plan.md
+
+# Training artifacts
+checkpoints/*.pt
+runs/
