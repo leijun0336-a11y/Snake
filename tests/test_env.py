@@ -32,3 +32,25 @@ def test_wall_collision_ends_episode() -> None:
 
     assert done is True
     assert reward == -10.0
+
+def test_can_move_into_current_tail_when_not_eating() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1)
+    env.snake = [Point(2, 2), Point(2, 3), Point(1, 3), Point(1, 2)]
+    env.direction = Direction.LEFT
+    env.food = Point(5, 5)
+
+    _, reward, done, _ = env.step(0)
+
+    assert done is False
+    assert reward == 0.0
+    assert env.snake[0] == Point(1, 2)
+    assert len(env.snake) == 4
+
+
+def test_current_tail_is_collision_when_tail_will_not_move() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1)
+    env.snake = [Point(2, 2), Point(2, 3), Point(1, 3), Point(1, 2)]
+    env.food = Point(1, 2)
+
+    assert env._is_collision_after_move(Point(1, 2)) is True
+
