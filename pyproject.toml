@@ -9,7 +9,7 @@ dependencies = [
     "numpy>=2.0",
     "pygame>=2.6",
     "tensorboard>=2.17",
-    "torch>=2.4",
+    # torch 使用 AutoDL 自带的 (2.5.1+cu124)
 ]
 
 [project.scripts]
@@ -21,6 +21,9 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
+
+[tool.uv]
+package = true
 
 [tool.ruff]
 line-length = 100
