@@ -20,7 +20,7 @@ except ImportError:
 # 解析启动脚本时的命令行参数
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a DQN agent for Snake.")
-    parser.add_argument("--episodes", type=int, default=TrainConfig.epidddsodes)
+    parser.add_argument("--episodes", type=int, default=TrainConfig.episodes)
     # 是否带渲染训练, action="store_true"表示：启动脚本时写上--render则为True，不写默认为False
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
@@ -145,14 +145,14 @@ def main() -> None:
                 # 记录最近最多100次获得的游戏的平均分
                 # 注意游戏的分数和环境的奖励是不同的概念，一个是指标，一个是训练信号
                 mean_score = sum(scores[-100:]) / min(len(scores), 100)
+                # episode_steps 用来区分“很快撞死”和“走了很久但没吃到食物”。
+                episode_steps = int(info["steps"])
                 # 吃食效率 = 吃到的食物数 / 存活步数，衡量策略是否直奔目标
                 score_per_step = score / episode_steps if episode_steps > 0 else 0.0
                 # 一个episode中产生的所有损失求平均。
                 mean_loss = sum(losses) / len(losses) if losses else 0.0
                 mean_losses.append(mean_loss)
                 mean_loss_100 = sum(mean_losses[-100:]) / min(len(mean_losses), 100)
-                # episode_steps 用来区分“很快撞死”和“走了很久但没吃到食物”。
-                episode_steps = env.frame_iteration
 
                 # 存下得分最高时的参数
                 if score > best_score:

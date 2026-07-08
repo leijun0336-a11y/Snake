@@ -103,7 +103,7 @@ class SnakeEnv:
         if self._is_collision_after_move(new_head) or self._is_too_long_without_food():
             done = True
             reward = -10.0
-            return self.get_state(), reward, done, {"score": self.score}
+            return self.get_state(), reward, done, self._get_info()
 
         # 奖励条件
         self.snake.insert(0, new_head)
@@ -120,7 +120,7 @@ class SnakeEnv:
             self.renderer.render(self.snake, self.food, self.score)
 
         # 返回环境反馈的状态向量，奖励，是否结束，其他额外信息info.
-        return self.get_state(), reward, done, {"score": self.score}
+        return self.get_state(), reward, done, self._get_info()
 
     # 把当前游戏局面转换成DQN能输入的状态向量。
     def get_state(self) -> list[int]:
@@ -178,6 +178,14 @@ class SnakeEnv:
     def close(self) -> None:
         if self.renderer is not None:
             self.renderer.close()
+
+    def _get_info(self) -> dict[str, int]:
+        return {
+            "score": self.score,
+            "steps": self.frame_iteration,
+            "snake_length": len(self.snake),
+            "steps_since_food": self.steps_since_food,
+        }
 
     def _place_food(self) -> None:
         available = [

@@ -1,6 +1,6 @@
 # Snake AI
 
-用 DQN 训练一个会玩贪吃蛇的强化学习智能体。当前版本是初始闭环版：包含游戏环境、pygame 渲染、DQN 智能体、训练入口、评估入口和基础测试。
+用 DQN 训练一个会玩贪吃蛇的强化学习智能体。项目包含游戏环境、pygame 渲染、DQN agent、训练入口、评估入口、TensorBoard 日志和基础测试。
 
 ## 项目结构
 
@@ -12,12 +12,18 @@ src/snake_ai/
 ├── train.py       # 训练入口
 ├── evaluate.py    # 评估入口
 ├── config.py      # 默认配置
-└── utils.py       # 随机种子与可复现性工具
+└── utils.py       # 随机种子与可复现工具
+
+scripts/
+├── train_autodl.sh
+├── evaluate.sh
+├── train_autodl.ps1
+└── evaluate.ps1
 ```
 
 ## 本地开发
 
-如果本地暂时不下载依赖，可以先只看代码和修改代码。之后在 AutoDL 或合适环境中执行：
+安装依赖：
 
 ```bash
 uv sync
@@ -29,26 +35,30 @@ uv sync
 uv run pytest
 ```
 
-`tests/` 里的测试用于检查代码逻辑是否正确，例如环境重置、移动、撞墙、经验池采样等；它不需要训练好的模型。`evaluate.py` 用于加载训练好的模型并评估 AI 的实际分数，需要先有 `checkpoints/<run_name>/best.pt` 或其他 checkpoint。
+`tests/` 用于检查环境重置、移动、撞墙、经验池采样等基础逻辑；评估脚本需要先有训练产出的 checkpoint。
+
+## 启动脚本
+
+Linux / AutoDL：
+
+```bash
+bash scripts/train_autodl.sh
+bash scripts/evaluate.sh
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\train_autodl.ps1
+.\scripts\evaluate.ps1
+```
 
 ## 训练
 
-无渲染训练：
+直接训练：
 
 ```bash
 uv run python -m snake_ai.train
-```
-
-小规模测试训练：
-
-```bash
-uv run python -m snake_ai.train --episodes 20
-```
-
-带渲染训练，主要用于观察，不建议正式训练时使用：
-
-```bash
-uv run python -m snake_ai.train --render --episodes 5
 ```
 
 训练产物：
@@ -56,16 +66,69 @@ uv run python -m snake_ai.train --render --episodes 5
 - `checkpoints/<run_name>/best.pt`
 - `checkpoints/<run_name>/latest.pt`
 - `runs/<run_name>/train_metrics.csv`
-- TensorBoard 训练日志，event 文件名带有 `.train` 后缀，指标使用 `train/` 前缀分组
+- TensorBoard 训练日志，event 文件名带有 `.train` 后缀
 
 训练日志会记录 `score`、`best_score`、`mean_score_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。
 
-## TensorBoard 可视化
+## 评估
 
-训练或评估写入 TensorBoard 日志后，在项目根目录启动：
+直接评估：
 
 ```bash
-uv run tensorboard --logdir runs
+uv run python -m snake_ai.evaluate
+```
+
+默认会加载最近一次训练目录中的 `checkpoints/<run_name>/best.pt`。
+
+评估产物默认绑定到被评估 checkpoint 对应的 `runs/<run_name>` 目录：
+
+- `eval_metrics.csv`：追加记录每一局的 `score`、`steps`、`score_per_step` 和 `max_snake_length`
+- TensorBoard 评估日志，event 文件名带有 `.eval` 后缀
+
+多次运行评估时，新的测试指标会继续追加到同一个训练目录，不会覆盖旧记录。
+
+## 参数说明
+
+训练参数：
+
+- `--episodes`：训练 episode 数量。
+- `--render`：训练时打开 pygame 渲染窗口。
+- `--width`：游戏网格宽度。
+- `--height`：游戏网格高度。
+- `--checkpoint-dir`：checkpoint 输出目录。
+- `--runs-dir`：训练日志输出目录。
+
+评估参数：
+
+- `--checkpoint`：指定要加载的 checkpoint。
+- `--episodes`：评估 episode 数量。
+- `--no-render`：评估时不打开 pygame 渲染窗口。
+- `--width`：游戏网格宽度。
+- `--height`：游戏网格高度。
+- `--tensorboard`：写入 TensorBoard 评估日志和 `eval_metrics.csv`。
+- `--eval-output-dir`：指定评估指标输出目录。
+
+TensorBoard 参数：
+
+- `--logdir`：指定 TensorBoard 读取的日志目录。
+
+## 环境 info
+
+`SnakeEnv.step()` 返回的 `info` 字典包含环境即时指标：
+
+- `score`：当前局吃到的食物数。
+- `steps`：当前局已经走过的步数。
+- `snake_length`：当前蛇身长度。
+- `steps_since_food`：距离上次吃到食物已经走过的步数。
+
+评估脚本会基于这些即时指标继续计算 `score_per_step`、`max_snake_length`、平均分等汇总指标。
+
+## TensorBoard
+
+启动 TensorBoard：
+
+```bash
+uv run tensorboard
 ```
 
 然后在浏览器打开：
@@ -77,58 +140,17 @@ http://localhost:6006
 `runs/<run_name>/` 里可能同时包含训练和评估 event 文件：
 
 - `.train` 后缀：训练指标，例如 `train/score`、`train/loss`、`train/mean_score_100`
-- `.eval` 后缀：评估图，例如 `eval/scores`
-
-如果在 AutoDL 或远程服务器上运行，需要使用平台自带的 TensorBoard 面板，或把服务器的 `6006` 端口转发到本地。
+- `.eval` 后缀：评估指标，例如 `eval/score`、`eval/steps`、`eval/score_per_step`、`eval/max_snake_length`
 
 ## 可复现性
 
-训练和评估入口都会调用 `snake_ai.utils.set_seed()`，统一设置 Python、NumPy、PyTorch 和 CUDA 的随机种子，并默认开启 PyTorch/cuDNN 的确定性设置。这样能让同一环境下的实验尽量可复现。
+训练和评估入口都会调用 `snake_ai.utils.set_seed()`，统一设置 Python、NumPy、PyTorch 和 CUDA 的随机种子，并默认开启 PyTorch/cuDNN 的确定性设置。
 
-需要注意：不同 GPU、CUDA、驱动或 PyTorch 版本之间仍可能存在细微差异，因此这里追求的是“尽量可复现”，不是跨所有机器的绝对一致。
+不同 GPU、CUDA、驱动或 PyTorch 版本之间仍可能存在细微差异，因此这里追求的是尽量可复现，不是跨所有机器的绝对一致。
 
-## 评估
-
-```bash
-uv run python -m snake_ai.evaluate
-```
-
-默认会加载最近一次训练目录中的 `checkpoints/<run_name>/best.pt`。
-
-指定 checkpoint 评估：
-
-```bash
-指令:
-
-uv run python -m snake_ai.evaluate --no-render --episodes 10
-
-或linux专用的
-
-bash /scripts/evaluate.sh
-
-在此基础上，如果只是想看指标数据，则追加:
---no-render --tensorboard
-```
-
-
-默认会把评估产物绑定到最近一次训练目录 `runs/dqn_*` 下：
-
-- `eval_metrics.csv`：追加记录每一次评估中每一局的 score
-- TensorBoard 评估日志：event 文件名带有 `.eval` 后缀，记录一张 `eval/scores` 评估图，包含所有 score、平均分参考线和最高分参考线
-
-多次运行评估时，新的测试指标会继续追加到同一个训练目录，不会覆盖旧的评估记录。
-
-如果想手动指定输出目录：
-
-```bash
-uv run python -m snake_ai.evaluate --no-render --episodes 10 --tensorboard --eval-output-dir runs/dqn_20260707_151533
-```
-
-## tmux 使用
+## tmux
 
 在远程服务器上训练时，SSH 断开会导致进程终止。用 tmux 可以让训练在后台持续运行。
-
-安装（AutoDL 已预装，可跳过）：
 
 ```bash
 sudo apt-get update && sudo apt-get install -y tmux
@@ -141,25 +163,20 @@ sudo apt-get update && sudo apt-get install -y tmux
 | 新建会话 | `tmux new -s snake` |
 | 查看所有会话 | `tmux ls` |
 | 接入已有会话 | `tmux attach -t snake` |
-| 断开（保留后台） | `Ctrl+B` 然后按 `D` |
-| 水平分屏 | `Ctrl+B` 然后按 `"` |
-| 垂直分屏 | `Ctrl+B` 然后按 `%` |
-| 切换窗格 | `Ctrl+B` 然后按方向键 |
-| 滚动查看历史输出 | `Ctrl+B` 然后按 `[`（退出按 `q`） |
+| 断开并保留后台 | `Ctrl+B` 然后按 `D` |
 | 删除会话 | `tmux kill-session -t snake` |
-
 
 ## AutoDL
 
 上传项目后可以运行：
 
 ```bash
-bash scripts/train_autodl.sh --episodes 2000
+bash scripts/train_autodl.sh
 ```
 
-如果服务器镜像暂时不用 uv，也可以安装为可编辑包后运行：
+如果服务器镜像暂时不用 `uv`，也可以安装为可编辑包后运行：
 
 ```bash
 pip install -e .
-python -m snake_ai.train --episodes 2000
+python -m snake_ai.train
 ```

@@ -60,6 +60,13 @@ def find_latest_best_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
     return latest_checkpoint
 
 
+def find_run_dir_for_checkpoint(checkpoint_path: Path, runs_dir: Path = RUNS_DIR) -> Path:
+    run_name = checkpoint_path.parent.name
+    if run_name.startswith("dqn_"):
+        return runs_dir / run_name
+    return find_latest_run_dir(runs_dir)
+
+
 def main() -> None:
     args = parse_args()
     train_config = TrainConfig()
@@ -71,7 +78,7 @@ def main() -> None:
     # ---- 确定评估日志输出目录 ----
     output_dir: Path | None = None
     if args.tensorboard:
-        output_dir = args.eval_output_dir or find_latest_run_dir()
+        output_dir = args.eval_output_dir or find_run_dir_for_checkpoint(checkpoint_path)
         output_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- TensorBoard ----
@@ -147,13 +154,13 @@ def main() -> None:
                 action = agent.act(state, training=False)
                 state, _, done, info = env.step(action)
                 # 每步记录蛇身长度，追踪本局峰值
-                current_length = len(env.snake)
+                current_length = int(info["snake_length"])
                 if current_length > max_snake_length:
                     max_snake_length = current_length
 
             # 记录这次episode的各项指标
             score = int(info["score"])
-            episode_steps = env.frame_iteration
+            episode_steps = int(info["steps"])
             scores.append(score)
             steps.append(episode_steps)
             max_lengths.append(max_snake_length)

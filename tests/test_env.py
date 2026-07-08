@@ -21,6 +21,9 @@ def test_step_moves_snake_and_returns_gym_like_tuple() -> None:
     assert isinstance(reward, float)
     assert isinstance(done, bool)
     assert "score" in info
+    assert "steps" in info
+    assert "snake_length" in info
+    assert "steps_since_food" in info
 
 
 def test_wall_collision_ends_episode() -> None:
