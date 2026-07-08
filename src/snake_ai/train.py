@@ -41,17 +41,22 @@ def main() -> None:
     run_name = datetime.now().strftime("dqn_%Y%m%d_%H%M%S")
     # 定义文件路径。命令行参数里的短横线 - 会自动转换成 Python 属性名里的下划线 _
     run_dir = args.runs_dir / run_name
+    # checkpoint 也使用同一个 run_name 分目录保存，避免多次训练互相覆盖 best.pt/latest.pt。
+    checkpoint_dir = args.checkpoint_dir / run_name
     # 创建每次训练过程的文件夹，注意一次训练包含多个episode.
     # runs侧重记录日志和指标，比如每一局分数 score，最近 100 局平均分 mean_score_100，loss
     run_dir.mkdir(parents=True, exist_ok=True)
-    # 创建断点文件夹，断点侧重记录模型权重，用于加载模型和继续训练。
-    args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    # 创建本次训练专属断点文件夹，断点侧重记录模型权重，用于加载模型和继续训练。
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # 在指定的文件夹（这里是刚才创建的 run_dir）里新建一个日志文件(需要TensorBoard)。
-    writer = SummaryWriter(run_dir) if SummaryWriter is not None else None
+    print(f"run_dir={run_dir}")
+    print(f"checkpoint_dir={checkpoint_dir}")
+
+    # 在指定的文件夹（这里是刚才创建的 run_dir）里新建训练日志文件；.train 后缀方便和评估日志区分。
+    writer = SummaryWriter(run_dir, filename_suffix=".train") if SummaryWriter is not None else None
     
-    # metrics.csv 是一个训练指标表格文件
-    csv_path = run_dir / "metrics.csv"
+    # train_metrics.csv 是训练指标表格文件；和 eval_metrics.csv 配对，文件名能直接看出用途。
+    csv_path = run_dir / "train_metrics.csv"
 
     env = SnakeEnv(
         width=env_config.width,
@@ -89,11 +94,24 @@ def main() -> None:
     )
 
     scores: list[int] = []
+    mean_losses: list[float] = []
     best_score = -1
 
     with csv_path.open("w", newline="", encoding="utf-8") as file:
         metrics = csv.writer(file)
-        metrics.writerow(["episode", "score", "mean_score_100", "epsilon", "loss"])
+        metrics.writerow(
+            [
+                "episode",
+                "score",
+                "best_score",
+                "mean_score_100",
+                "episode_steps",
+                "epsilon",
+                "loss",
+                "mean_loss_100",
+                "replay_buffer_size",
+            ]
+        )
 
         try:
             for episode in range(1, train_config.episodes + 1):
@@ -128,25 +146,45 @@ def main() -> None:
                 mean_score = sum(scores[-100:]) / min(len(scores), 100)
                 # 一个episode中产生的所有损失求平均。
                 mean_loss = sum(losses) / len(losses) if losses else 0.0
-
-                if writer is not None:
-                    writer.add_scalar("score", score, episode)
-                    writer.add_scalar("mean_score_100", mean_score, episode)
-                    writer.add_scalar("epsilon", agent.epsilon, episode)
-                    writer.add_scalar("loss", mean_loss, episode)
-
-                metrics.writerow([episode, score, f"{mean_score:.4f}", f"{agent.epsilon:.6f}", mean_loss])
-                
-                # 强制将内存缓冲区（Buffer）中的数据立刻写入到实际的硬盘文件中，防止数据丢失
-                file.flush()
+                mean_losses.append(mean_loss)
+                mean_loss_100 = sum(mean_losses[-100:]) / min(len(mean_losses), 100)
+                # episode_steps 用来区分“很快撞死”和“走了很久但没吃到食物”。
+                episode_steps = env.frame_iteration
 
                 # 存下得分最高时的参数
                 if score > best_score:
                     best_score = score
-                    agent.save(args.checkpoint_dir / "best.pt")
+                    agent.save(checkpoint_dir / "best.pt")
+
+                if writer is not None:
+                    writer.add_scalar("train/score", score, episode)
+                    writer.add_scalar("train/best_score", best_score, episode)
+                    writer.add_scalar("train/mean_score_100", mean_score, episode)
+                    writer.add_scalar("train/episode_steps", episode_steps, episode)
+                    writer.add_scalar("train/epsilon", agent.epsilon, episode)
+                    writer.add_scalar("train/loss", mean_loss, episode)
+                    writer.add_scalar("train/mean_loss_100", mean_loss_100, episode)
+                    writer.add_scalar("train/replay_buffer_size", len(agent.replay_buffer), episode)
+
+                metrics.writerow(
+                    [
+                        episode,
+                        score,
+                        best_score,
+                        f"{mean_score:.4f}",
+                        episode_steps,
+                        f"{agent.epsilon:.6f}",
+                        mean_loss,
+                        f"{mean_loss_100:.4f}",
+                        len(agent.replay_buffer),
+                    ]
+                )
+                
+                # 强制将内存缓冲区（Buffer）中的数据立刻写入到实际的硬盘文件中，防止数据丢失
+                file.flush()
 
                 # 存下最近一次episode更新出来的参数
-                agent.save(args.checkpoint_dir / "latest.pt")
+                agent.save(checkpoint_dir / "latest.pt")
 
                 # 每个episode输出一次指标信息
                 print(

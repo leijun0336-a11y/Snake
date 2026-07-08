@@ -29,7 +29,7 @@ uv sync
 uv run pytest
 ```
 
-`tests/` 里的测试用于检查代码逻辑是否正确，例如环境重置、移动、撞墙、经验池采样等；它不需要训练好的模型。`evaluate.py` 用于加载训练好的模型并评估 AI 的实际分数，需要先有 `checkpoints/best.pt` 或其他 checkpoint。
+`tests/` 里的测试用于检查代码逻辑是否正确，例如环境重置、移动、撞墙、经验池采样等；它不需要训练好的模型。`evaluate.py` 用于加载训练好的模型并评估 AI 的实际分数，需要先有 `checkpoints/<run_name>/best.pt` 或其他 checkpoint。
 
 ## 训练
 
@@ -53,10 +53,12 @@ uv run python -m snake_ai.train --render --episodes 5
 
 训练产物：
 
-- `checkpoints/best.pt`
-- `checkpoints/latest.pt`
-- `runs/<run_name>/metrics.csv`
-- TensorBoard 日志
+- `checkpoints/<run_name>/best.pt`
+- `checkpoints/<run_name>/latest.pt`
+- `runs/<run_name>/train_metrics.csv`
+- TensorBoard 训练日志，event 文件名带有 `.train` 后缀，指标使用 `train/` 前缀分组
+
+训练日志会记录 `score`、`best_score`、`mean_score_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。
 
 ## 可复现性
 
@@ -67,13 +69,40 @@ uv run python -m snake_ai.train --render --episodes 5
 ## 评估
 
 ```bash
-uv run python -m snake_ai.evaluate --checkpoint checkpoints/best.pt
+uv run python -m snake_ai.evaluate
+```
+
+默认会加载最近一次训练目录中的 `checkpoints/<run_name>/best.pt`。
+
+指定 checkpoint 评估：
+
+```bash
+uv run python -m snake_ai.evaluate --checkpoint checkpoints/dqn_20260707_151533/best.pt
 ```
 
 无窗口评估：
 
 ```bash
 uv run python -m snake_ai.evaluate --no-render --episodes 10
+```
+
+保存评估指标并写入 TensorBoard：
+
+```bash
+uv run python -m snake_ai.evaluate --no-render --episodes 10 --tensorboard
+```
+
+默认会把评估产物绑定到最近一次训练目录 `runs/dqn_*` 下：
+
+- `eval_metrics.csv`：追加记录每一次评估中每一局的 score
+- TensorBoard 评估日志：event 文件名带有 `.eval` 后缀，记录一张 `eval/scores` 评估图，包含所有 score、平均分参考线和最高分参考线
+
+多次运行评估时，新的测试指标会继续追加到同一个训练目录，不会覆盖旧的评估记录。
+
+如果想手动指定输出目录：
+
+```bash
+uv run python -m snake_ai.evaluate --no-render --episodes 10 --tensorboard --eval-output-dir runs/dqn_20260707_151533
 ```
 
 ## AutoDL
