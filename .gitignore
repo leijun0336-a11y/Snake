@@ -12,5 +12,5 @@ wheels/
 plan.md
 
 # Training artifacts
-checkpoints/*.pt
+checkpoints/
 runs/

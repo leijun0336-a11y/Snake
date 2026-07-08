@@ -60,6 +60,27 @@ uv run python -m snake_ai.train --render --episodes 5
 
 训练日志会记录 `score`、`best_score`、`mean_score_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。
 
+## TensorBoard 可视化
+
+训练或评估写入 TensorBoard 日志后，在项目根目录启动：
+
+```bash
+uv run tensorboard --logdir runs
+```
+
+然后在浏览器打开：
+
+```text
+http://localhost:6006
+```
+
+`runs/<run_name>/` 里可能同时包含训练和评估 event 文件：
+
+- `.train` 后缀：训练指标，例如 `train/score`、`train/loss`、`train/mean_score_100`
+- `.eval` 后缀：评估图，例如 `eval/scores`
+
+如果在 AutoDL 或远程服务器上运行，需要使用平台自带的 TensorBoard 面板，或把服务器的 `6006` 端口转发到本地。
+
 ## 可复现性
 
 训练和评估入口都会调用 `snake_ai.utils.set_seed()`，统一设置 Python、NumPy、PyTorch 和 CUDA 的随机种子，并默认开启 PyTorch/cuDNN 的确定性设置。这样能让同一环境下的实验尽量可复现。
