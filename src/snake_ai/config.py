@@ -25,7 +25,7 @@ class EnvConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     # 训练总局数，每一局从 reset 开始，到撞墙、撞身体或超时结束。
-    episodes: int = 2000
+    episodes: int = 1000
     # 每次从经验池中采样多少条经验用于一次神经网络更新。
     batch_size: int = 64
     # 折扣因子，越接近 1 越重视未来奖励。

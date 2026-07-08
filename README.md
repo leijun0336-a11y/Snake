@@ -98,20 +98,18 @@ uv run python -m snake_ai.evaluate
 指定 checkpoint 评估：
 
 ```bash
-uv run python -m snake_ai.evaluate --checkpoint checkpoints/dqn_20260707_151533/best.pt
-```
+指令:
 
-无窗口评估：
-
-```bash
 uv run python -m snake_ai.evaluate --no-render --episodes 10
+
+或linux专用的
+
+bash /scripts/evaluate.sh
+
+在此基础上，如果只是想看指标数据，则追加:
+--no-render --tensorboard
 ```
 
-保存评估指标并写入 TensorBoard：
-
-```bash
-uv run python -m snake_ai.evaluate --no-render --episodes 10 --tensorboard
-```
 
 默认会把评估产物绑定到最近一次训练目录 `runs/dqn_*` 下：
 
@@ -125,6 +123,31 @@ uv run python -m snake_ai.evaluate --no-render --episodes 10 --tensorboard
 ```bash
 uv run python -m snake_ai.evaluate --no-render --episodes 10 --tensorboard --eval-output-dir runs/dqn_20260707_151533
 ```
+
+## tmux 使用
+
+在远程服务器上训练时，SSH 断开会导致进程终止。用 tmux 可以让训练在后台持续运行。
+
+安装（AutoDL 已预装，可跳过）：
+
+```bash
+sudo apt-get update && sudo apt-get install -y tmux
+```
+
+常用操作：
+
+| 操作 | 命令 |
+|------|------|
+| 新建会话 | `tmux new -s snake` |
+| 查看所有会话 | `tmux ls` |
+| 接入已有会话 | `tmux attach -t snake` |
+| 断开（保留后台） | `Ctrl+B` 然后按 `D` |
+| 水平分屏 | `Ctrl+B` 然后按 `"` |
+| 垂直分屏 | `Ctrl+B` 然后按 `%` |
+| 切换窗格 | `Ctrl+B` 然后按方向键 |
+| 滚动查看历史输出 | `Ctrl+B` 然后按 `[`（退出按 `q`） |
+| 删除会话 | `tmux kill-session -t snake` |
+
 
 ## AutoDL
 

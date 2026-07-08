@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import datetime
 from pathlib import Path
 
 from snake_ai.agents import DQNAgent
@@ -61,120 +60,6 @@ def find_latest_best_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
     return latest_checkpoint
 
 
-def get_next_eval_step(csv_path: Path) -> int:
-    # 多次评估会追加到同一个 CSV；这里用已有行数推算下一次 TensorBoard 的起始 step。
-    if not csv_path.exists():
-        return 1
-
-    with csv_path.open("r", newline="", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-        global_steps = [
-            int(row["global_step"]) for row in reader if row.get("global_step", "").isdigit()
-        ]
-
-    return max(global_steps, default=0) + 1
-
-
-def save_eval_metrics(
-    scores: list[int],
-    output_dir: Path,
-    checkpoint: Path,
-    eval_run: str,
-    start_step: int,
-) -> Path:
-    # 把每一局的 score 追加写入 CSV，避免多次评估时覆盖历史测试结果。
-    output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = output_dir / "eval_metrics.csv"
-    average_score = sum(scores) / len(scores) if scores else 0.0
-    best_score = max(scores) if scores else 0
-    should_write_header = not csv_path.exists()
-
-    with csv_path.open("a", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        if should_write_header:
-            writer.writerow(
-                [
-                    "eval_run",
-                    "global_step",
-                    "episode",
-                    "score",
-                    "checkpoint",
-                    "average_score",
-                    "best_score",
-                ]
-            )
-        for episode, score in enumerate(scores, start=1):
-            global_step = start_step + episode - 1
-            writer.writerow(
-                [
-                    eval_run,
-                    global_step,
-                    episode,
-                    score,
-                    checkpoint,
-                    f"{average_score:.4f}",
-                    best_score,
-                ]
-            )
-
-    return csv_path
-
-
-def write_eval_tensorboard(
-    scores: list[int],
-    output_dir: Path,
-    eval_run: str,
-    start_step: int,
-) -> None:
-    # 评估结果写入同一个 run 目录，但只写一张 figure，避免均分/最高分被 TensorBoard 拆成单独图。
-    if SummaryWriter is None:
-        raise ImportError("TensorBoard is not installed. Please install tensorboard first.")
-
-    # matplotlib 只在需要写 TensorBoard 评估图时导入，普通评估不额外加载绘图库。
-    import matplotlib.pyplot as plt
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    average_score = sum(scores) / len(scores) if scores else 0.0
-    best_score = max(scores) if scores else 0
-    final_step = start_step + len(scores) - 1
-    episodes = list(range(1, len(scores) + 1))
-
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.plot(episodes, scores, marker="o", linewidth=1.8, label="score")
-    ax.axhline(average_score, color="tab:orange", linestyle="--", label=f"avg={average_score:.2f}")
-    ax.axhline(best_score, color="tab:green", linestyle=":", label=f"best={best_score}")
-    ax.set_title("Evaluation Scores")
-    ax.set_xlabel("Evaluation Episode")
-    ax.set_ylabel("Score")
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="upper right")
-
-    # 评估局数变多时，不要每一局都显示刻度，否则 TensorBoard 里的图会挤成一团。
-    if episodes:
-        tick_interval = max(1, len(episodes) // 10)
-        xticks = episodes[::tick_interval]
-        if xticks[-1] != episodes[-1]:
-            xticks.append(episodes[-1])
-        ax.set_xticks(xticks)
-
-    # TensorBoard 的 scalar 平滑会让短序列比例尺看起来异常；figure 这里手动给真实分数留边界。
-    if scores:
-        min_score = min(scores)
-        max_score = max(scores)
-        padding = max(1.0, (max_score - min_score) * 0.1)
-        ax.set_ylim(min_score - padding, max_score + padding)
-
-    fig.tight_layout()
-
-    # 给评估 event 文件加上简短后缀，避免和训练 event 文件都叫 events.out.tfevents.* 而难以区分。
-    writer = SummaryWriter(output_dir, filename_suffix=".eval")
-    try:
-        writer.add_figure("eval/scores", fig, final_step)
-    finally:
-        writer.close()
-        plt.close(fig)
-
-
 def main() -> None:
     args = parse_args()
     train_config = TrainConfig()
@@ -182,67 +67,146 @@ def main() -> None:
     env_config = EnvConfig(width=args.width, height=args.height)
     # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 best.pt。
     checkpoint_path = args.checkpoint or find_latest_best_checkpoint()
+
+    # ---- 确定评估日志输出目录 ----
+    output_dir: Path | None = None
+    if args.tensorboard:
+        output_dir = args.eval_output_dir or find_latest_run_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- TensorBoard ----
+    writer = (
+        SummaryWriter(output_dir, filename_suffix=".eval")
+        if (SummaryWriter is not None and output_dir is not None)
+        else None
+    )
+
+    # ---- CSV ----
+    csv_path = output_dir / "eval_metrics.csv" if output_dir is not None else None
+
     print(f"checkpoint={checkpoint_path}")
+    if output_dir is not None:
+        print(f"output_dir={output_dir}")
+
     env = SnakeEnv(
         width=env_config.width,
         height=env_config.height,
         # 默认开启渲染
-        render_mode=not args.no_render,  
+        render_mode=not args.no_render,
         # 一个格子的像素个数
-        cell_size=env_config.cell_size,  
+        cell_size=env_config.cell_size,
         fps=env_config.fps,
         seed=train_config.seed,
     )
     agent = DQNAgent(
         # 状态维度
-        state_size=env.state_size,  
+        state_size=env.state_size,
         # 动作维度
-        action_size=env.action_size,  
+        action_size=env.action_size,
         hidden_size=train_config.hidden_size,
         # 起始epsilon值(Epsilon-Greedy在评估时关闭)
-        epsilon_start=0.0,  
+        epsilon_start=0.0,
         # epsilon值的下限(评估时Epsilon-Greedy关闭)
-        epsilon_end=0.0,  
+        epsilon_end=0.0,
         seed=train_config.seed,
     )
-    
+
     # 加载模型参数用于测试
-    agent.load(checkpoint_path)  
-    
-    # 记录每个episode的分数
-    scores: list[int] = []  
+    agent.load(checkpoint_path)
+
+    scores: list[int] = []
+    steps: list[int] = []
+    max_lengths: list[int] = []
+    score_per_steps: list[float] = []
+    csv_file = None
     try:
-        for episode in range(1, args.episodes + 1):  
+        if csv_path is not None:
+            csv_file = csv_path.open("a", newline="", encoding="utf-8")
+            metrics = csv.writer(csv_file)
+            # 首次创建 CSV 时写入表头
+            if csv_path.stat().st_size == 0:
+                metrics.writerow(
+                    [
+                        "episode",
+                        "score",
+                        "steps",
+                        "score_per_step",
+                        "max_snake_length",
+                    ]
+                )
+
+        for episode in range(1, args.episodes + 1):
             state = env.reset()
             done = False
             info = {"score": 0}
-            
+            # 每局开始时蛇身长度为3(初始值)，后续吃到食物会增长
+            max_snake_length = len(env.snake)
+
             # 评估时只进行动作采样和环境反馈。
             while not done:
                 action = agent.act(state, training=False)
                 state, _, done, info = env.step(action)
-            # 记录这次episode的分数
-            scores.append(int(info["score"]))
-            
+                # 每步记录蛇身长度，追踪本局峰值
+                current_length = len(env.snake)
+                if current_length > max_snake_length:
+                    max_snake_length = current_length
+
+            # 记录这次episode的各项指标
+            score = int(info["score"])
+            episode_steps = env.frame_iteration
+            scores.append(score)
+            steps.append(episode_steps)
+            max_lengths.append(max_snake_length)
+            # 吃食效率 = 吃到的食物数 / 存活步数
+            score_per_step = score / episode_steps if episode_steps > 0 else 0.0
+            score_per_steps.append(score_per_step)
+
             # 每个episode输出一次信息。
-            print(f"episode={episode} score={info['score']}")
+            print(
+                f"episode={episode:4d}  score={score:3d}  "
+                f"steps={episode_steps:4d}  max_len={max_snake_length}  "
+                f"eff={score_per_step:.4f}"
+            )
+
+            if writer is not None:
+                # 单局得分
+                writer.add_scalar("eval/score", score, episode)
+                # 存活步数
+                writer.add_scalar("eval/steps", episode_steps, episode)
+                # 吃食效率
+                writer.add_scalar("eval/score_per_step", score_per_step, episode)
+                # 本局最大蛇身长度
+                writer.add_scalar("eval/max_snake_length", max_snake_length, episode)
+
+            if csv_path is not None:
+                metrics.writerow(
+                    [
+                        episode,
+                        score,
+                        episode_steps,
+                        f"{score_per_step:.6f}",
+                        max_snake_length,
+                    ]
+                )
+                csv_file.flush()
     finally:
         env.close()
+        if writer is not None:
+            writer.close()
+        if csv_file is not None:
+            csv_file.close()
 
-    # 这里输出的是本次评估的平均分和最高分
+    # 输出本次评估的汇总统计
     if scores:
-        print(f"average_score={sum(scores) / len(scores):.2f} best_score={max(scores)}")
-
-    if args.tensorboard:
-        # 没有手动指定目录时，评估指标默认写入最近一次训练目录，方便和训练指标放在一起看。
-        output_dir = args.eval_output_dir or find_latest_run_dir()
-        eval_run = datetime.now().strftime("eval_%Y%m%d_%H%M%S")
-        csv_path = output_dir / "eval_metrics.csv"
-        start_step = get_next_eval_step(csv_path)
-        metrics_path = save_eval_metrics(scores, output_dir, checkpoint_path, eval_run, start_step)
-        write_eval_tensorboard(scores, output_dir, eval_run, start_step)
-        print(f"eval_metrics={metrics_path}")
-        print(f"eval_tensorboard_dir={output_dir}")
+        avg_score = sum(scores) / len(scores)
+        avg_steps = sum(steps) / len(steps)
+        avg_eff = sum(score_per_steps) / len(score_per_steps)
+        avg_max_len = sum(max_lengths) / len(max_lengths)
+        print(
+            f"average_score={avg_score:.2f}  best_score={max(scores)}  "
+            f"avg_steps={avg_steps:.1f}  avg_eff={avg_eff:.4f}  "
+            f"avg_max_len={avg_max_len:.1f}"
+        )
 
 
 if __name__ == "__main__":

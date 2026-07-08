@@ -20,7 +20,7 @@ except ImportError:
 # 解析启动脚本时的命令行参数
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a DQN agent for Snake.")
-    parser.add_argument("--episodes", type=int, default=TrainConfig.episodes)
+    parser.add_argument("--episodes", type=int, default=TrainConfig.epidddsodes)
     # 是否带渲染训练, action="store_true"表示：启动脚本时写上--render则为True，不写默认为False
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
@@ -103,6 +103,7 @@ def main() -> None:
             [
                 "episode",
                 "score",
+                "score_per_step",
                 "best_score",
                 "mean_score_100",
                 "episode_steps",
@@ -144,6 +145,8 @@ def main() -> None:
                 # 记录最近最多100次获得的游戏的平均分
                 # 注意游戏的分数和环境的奖励是不同的概念，一个是指标，一个是训练信号
                 mean_score = sum(scores[-100:]) / min(len(scores), 100)
+                # 吃食效率 = 吃到的食物数 / 存活步数，衡量策略是否直奔目标
+                score_per_step = score / episode_steps if episode_steps > 0 else 0.0
                 # 一个episode中产生的所有损失求平均。
                 mean_loss = sum(losses) / len(losses) if losses else 0.0
                 mean_losses.append(mean_loss)
@@ -157,19 +160,30 @@ def main() -> None:
                     agent.save(checkpoint_dir / "best.pt")
 
                 if writer is not None:
+                    # 单局得分
                     writer.add_scalar("train/score", score, episode)
+                    # 吃食效率 = 吃到的食物数 / 存活步数
+                    writer.add_scalar("train/score_per_step", score_per_step, episode)
+                    # 历史最高分
                     writer.add_scalar("train/best_score", best_score, episode)
+                    # 最近100局滑动平均分
                     writer.add_scalar("train/mean_score_100", mean_score, episode)
+                    # 本局存活步数
                     writer.add_scalar("train/episode_steps", episode_steps, episode)
+                    # 当前探索率
                     writer.add_scalar("train/epsilon", agent.epsilon, episode)
+                    # 本局平均loss
                     writer.add_scalar("train/loss", mean_loss, episode)
+                    # 最近100局滑动平均loss
                     writer.add_scalar("train/mean_loss_100", mean_loss_100, episode)
+                    # 经验回放池当前容量
                     writer.add_scalar("train/replay_buffer_size", len(agent.replay_buffer), episode)
 
                 metrics.writerow(
                     [
                         episode,
                         score,
+                        f"{score_per_step:.6f}",
                         best_score,
                         f"{mean_score:.4f}",
                         episode_steps,
