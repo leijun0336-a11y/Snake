@@ -70,6 +70,8 @@ uv run python -m snake_ai.train
 
 训练日志会记录 `score`、`mean_score_100`、`episode_reward`、`mean_reward_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。其中 `loss` 是 Huber loss。
 
+训练默认启用早停策略。早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes` 局；之后如果连续 `--patience` 局没有超过 `--min-delta` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止。
+
 ## 评估
 
 直接评估：
@@ -97,6 +99,11 @@ uv run python -m snake_ai.evaluate
 - `--height`：游戏网格高度。
 - `--checkpoint-dir`：checkpoint 输出目录。
 - `--runs-dir`：训练日志输出目录。
+- `--no-early-stop`：关闭训练早停。
+- `--min-episodes`：早停生效前至少训练的 episode 数量。
+- `--patience`：超过最小训练局数后，允许连续多少个 episode 没有有效提升。
+- `--min-delta`：`mean_score_100` 至少提升多少才算一次有效提升。
+- `--target-mean-score`：达到指定 `mean_score_100` 后停止训练。
 
 评估参数：
 
@@ -122,6 +129,35 @@ TensorBoard 参数：
 - `steps_since_food`：距离上次吃到食物已经走过的步数。
 
 评估脚本会基于这些即时指标继续计算 `score_per_step`、`max_snake_length`、平均分等汇总指标。
+
+## 指标说明
+
+训练指标：
+
+| 指标 | TensorBoard tag | CSV 字段 | 含义 |
+|------|-----------------|----------|------|
+| 单局得分 | `train/score` | `score` | 当前 episode 吃到的食物数。 |
+| 吃食效率 | `train/score_per_step` | `score_per_step` | `score / episode_steps`。 |
+| 近 100 局平均得分 | `train/mean_score_100` | `mean_score_100` | 最近最多 100 个 episode 的 `score` 平均值。 |
+| 历史最高近 100 局平均得分 | `train/best_mean_score_100` | 无 | 历史最高 `mean_score_100`，用于保存 `best.pt`。 |
+| 单局累计奖励 | `train/episode_reward` | `episode_reward` | 当前 episode 内所有 step 的 reward 总和。 |
+| 近 100 局平均累计奖励 | `train/mean_reward_100` | `mean_reward_100` | 最近最多 100 个 episode 的 `episode_reward` 平均值。 |
+| 单局步数 | `train/episode_steps` | `episode_steps` | 当前 episode 的存活步数。 |
+| 探索率 | `train/epsilon` | `epsilon` | 当前 epsilon-greedy 探索率。 |
+| 单局平均损失 | `train/loss` | `loss` | 当前 episode 内所有学习 step 的平均 Huber loss。 |
+| 近 100 局平均损失 | `train/mean_loss_100` | `mean_loss_100` | 最近最多 100 个 episode 的 `loss` 平均值。 |
+| 经验池大小 | `train/replay_buffer_size` | `replay_buffer_size` | 当前 replay buffer 中的经验数量。 |
+| 训练摘要 | `train/report` | 无 | Text 页中的汇总表，包含均值、标准差、最小值、最大值和最后值。 |
+
+评估指标：
+
+| 指标 | TensorBoard tag | CSV 字段 | 含义 |
+|------|-----------------|----------|------|
+| 单局得分 | `eval/score` | `score` | 当前评估 episode 吃到的食物数。 |
+| 单局步数 | `eval/steps` | `steps` | 当前评估 episode 的存活步数。 |
+| 吃食效率 | `eval/score_per_step` | `score_per_step` | `score / steps`。 |
+| 最大蛇身长度 | `eval/max_snake_length` | `max_snake_length` | 当前评估 episode 中蛇身达到过的最大长度。 |
+| 评估摘要 | `eval/report` | 无 | Text 页中的汇总表，包含均值、标准差、最小值和最大值。 |
 
 ## TensorBoard
 

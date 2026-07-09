@@ -29,6 +29,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=EnvConfig.height)
     parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR)
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
+    # 关闭早停后会严格跑满 --episodes。
+    parser.add_argument("--no-early-stop", action="store_true")
+    # 至少训练多少局后，才允许早停判断生效。
+    parser.add_argument("--min-episodes", type=int, default=1000)
+    # 超过最小训练局数后，允许连续多少局没有有效提升。
+    parser.add_argument("--patience", type=int, default=500)
+    # mean_score_100 至少提升多少，才算一次有效提升。
+    parser.add_argument("--min-delta", type=float, default=0.5)
+    # 如果设置了目标平均分，达到该 mean_score_100 后直接停止训练。
+    parser.add_argument("--target-mean-score", type=float, default=None)
     return parser.parse_args()
 
 
@@ -180,6 +190,10 @@ def main() -> None:
     best_score = -1
     # 历史最高 mean_score_100，用于决定何时保存 best.pt。
     best_mean_score = float("-inf")
+    # 早停判断中的历史最高有效 mean_score_100，小于 min_delta 的提升不重置耐心计数。
+    early_stop_best_mean_score = float("-inf")
+    # 最近一次达到有效提升的 episode，用于判断是否长时间没有明显进步。
+    last_improve_episode = 0
     # 训练开始时间，用于计算 train/report 中的总耗时。
     train_start_time = time.perf_counter()
 
@@ -266,6 +280,11 @@ def main() -> None:
                     best_mean_score = mean_score
                     agent.save(checkpoint_dir / "best.pt")
 
+                # 早停使用 mean_score_100 判断收敛，不使用 reward，避免奖励塑形影响模型选择。
+                if mean_score > early_stop_best_mean_score + args.min_delta:
+                    early_stop_best_mean_score = mean_score
+                    last_improve_episode = episode
+
                 # 将训练指标写入 TensorBoard
                 if writer is not None:
                     # 单局得分
@@ -320,6 +339,35 @@ def main() -> None:
                     f"mean100={mean_score:6.2f} epsilon={agent.epsilon:.3f} "
                     f"loss={mean_loss:.4f} best_score={best_score}"
                 )
+
+                # early_stop_enabled 统一控制下面两种早停条件是否生效。
+                early_stop_enabled = not args.no_early_stop
+                # 达到目标 mean_score_100 后停止；至少等 100 局，避免前期均值窗口太短。
+                reached_target = (
+                    args.target_mean_score is not None
+                    and episode >= 100
+                    and mean_score >= args.target_mean_score
+                )
+                # 超过最小训练局数后，如果太久没有有效提升，则认为进入平台期。
+                patience_exhausted = (
+                    episode >= args.min_episodes
+                    and episode - last_improve_episode >= args.patience
+                )
+                if early_stop_enabled and reached_target:
+                    print(
+                        f"early_stop=target_mean_score "
+                        f"episode={episode} mean100={mean_score:.2f} "
+                        f"target={args.target_mean_score:.2f}"
+                    )
+                    break
+                if early_stop_enabled and patience_exhausted:
+                    print(
+                        f"early_stop=patience episode={episode} "
+                        f"best_mean100={best_mean_score:.2f} "
+                        f"last_improve_episode={last_improve_episode} "
+                        f"patience={args.patience}"
+                    )
+                    break
         finally:  # 无论上面是否跑完，这段代码都必须执行。
             env.close()
             if writer is not None:
