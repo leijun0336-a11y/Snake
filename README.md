@@ -1,6 +1,6 @@
 # Snake AI
 
-用 DQN 训练一个会玩贪吃蛇的强化学习智能体。项目包含游戏环境、pygame 渲染、DQN agent、训练入口、评估入口、TensorBoard 日志和基础测试。
+用 Double DQN + Dueling DQN 训练一个会玩贪吃蛇的强化学习智能体。项目包含游戏环境、pygame 渲染、DQN agent、训练入口、评估入口、TensorBoard 日志和基础测试。
 
 ## 项目结构
 
@@ -68,7 +68,7 @@ uv run python -m snake_ai.train
 - `runs/<run_name>/train_metrics.csv`
 - TensorBoard 训练日志，event 文件名带有 `.train` 后缀
 
-训练日志会记录 `score`、`best_score`、`mean_score_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。
+训练日志会记录 `score`、`mean_score_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。
 
 ## 评估
 

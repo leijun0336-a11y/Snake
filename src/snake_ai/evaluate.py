@@ -61,6 +61,7 @@ def find_latest_best_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
 
 
 def find_run_dir_for_checkpoint(checkpoint_path: Path, runs_dir: Path = RUNS_DIR) -> Path:
+    # 确定评估结果的tensorboard文件存储在哪个文件夹下。
     run_name = checkpoint_path.parent.name
     if run_name.startswith("dqn_"):
         return runs_dir / run_name
@@ -72,6 +73,7 @@ def main() -> None:
     train_config = TrainConfig()
     set_seed(train_config.seed)
     env_config = EnvConfig(width=args.width, height=args.height)
+    
     # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 best.pt。
     checkpoint_path = args.checkpoint or find_latest_best_checkpoint()
 
@@ -212,7 +214,7 @@ def main() -> None:
         print(
             f"average_score={avg_score:.2f}  best_score={max(scores)}  "
             f"avg_steps={avg_steps:.1f}  avg_eff={avg_eff:.4f}  "
-            f"avg_max_len={avg_max_len:.1f}"
+            f"avg_max_len={avg_max_len:.2f}"
         )
 
 

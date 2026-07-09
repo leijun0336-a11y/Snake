@@ -96,7 +96,9 @@ def main() -> None:
     scores: list[int] = []
     mean_losses: list[float] = []
     best_score = -1
+    best_mean_score = float("-inf")
 
+    # 在 CSV 文件中写入训练指标表头
     with csv_path.open("w", newline="", encoding="utf-8") as file:
         metrics = csv.writer(file)
         metrics.writerow(
@@ -104,7 +106,6 @@ def main() -> None:
                 "episode",
                 "score",
                 "score_per_step",
-                "best_score",
                 "mean_score_100",
                 "episode_steps",
                 "epsilon",
@@ -157,17 +158,22 @@ def main() -> None:
                 # 存下得分最高时的参数
                 if score > best_score:
                     best_score = score
+
+                # 保存最近 100 局平均分最高时的参数；不足 100 局时用已有局数的平均分。
+                if mean_score > best_mean_score:
+                    best_mean_score = mean_score
                     agent.save(checkpoint_dir / "best.pt")
 
+                # 将训练指标写入 TensorBoard
                 if writer is not None:
                     # 单局得分
                     writer.add_scalar("train/score", score, episode)
                     # 吃食效率 = 吃到的食物数 / 存活步数
                     writer.add_scalar("train/score_per_step", score_per_step, episode)
                     # 历史最高分
-                    writer.add_scalar("train/best_score", best_score, episode)
                     # 最近100局滑动平均分
                     writer.add_scalar("train/mean_score_100", mean_score, episode)
+                    writer.add_scalar("train/best_mean_score_100", best_mean_score, episode)
                     # 本局存活步数
                     writer.add_scalar("train/episode_steps", episode_steps, episode)
                     # 当前探索率
@@ -184,7 +190,6 @@ def main() -> None:
                         episode,
                         score,
                         f"{score_per_step:.6f}",
-                        best_score,
                         f"{mean_score:.4f}",
                         episode_steps,
                         f"{agent.epsilon:.6f}",
@@ -204,7 +209,7 @@ def main() -> None:
                 print(
                     f"episode={episode:4d} score={score:3d} "
                     f"mean100={mean_score:6.2f} epsilon={agent.epsilon:.3f} "
-                    f"loss={mean_loss:.4f} best={best_score}"
+                    f"loss={mean_loss:.4f} best_score={best_score}"
                 )
         finally:  # 无论上面是否跑完，这段代码都必须执行。
             env.close()

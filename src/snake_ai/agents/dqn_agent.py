@@ -36,6 +36,8 @@ class DQNAgent:
         epsilon_decay: float = 0.995,
         # 每隔多少次学习步骤，把 policy_net 的参数复制一份给 target_net.
         target_update_interval: int = 1000,
+        # 是否使用 Dueling DQN 架构，分离状态值和优势值。
+        dueling: bool = True,
         # 随机种子，用于让探索、采样和网络初始化尽量可复现。
         seed: int = 42,
         # 计算设备；不传时优先使用 cuda，否则使用 cpu。
@@ -43,20 +45,27 @@ class DQNAgent:
     ) -> None:
         self.state_size = state_size
         self.action_size = action_size
+        self.hidden_size = hidden_size
+        self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
         self.epsilon = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
         self.target_update_interval = target_update_interval
+        self.dueling = dueling
         self.learn_steps = 0
         self.random = random.Random(seed)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         
         # 生成随机数种子
         torch.manual_seed(seed)
-        self.policy_net = QNetwork(state_size, hidden_size, action_size).to(self.device)
-        self.target_net = QNetwork(state_size, hidden_size, action_size).to(self.device)
+        self.policy_net = QNetwork(state_size, hidden_size, action_size, dueling=dueling).to(
+            self.device
+        )
+        self.target_net = QNetwork(state_size, hidden_size, action_size, dueling=dueling).to(
+            self.device
+        )
         # load_state_dict() 是一个用来加载模型参数的方法，这里用于参数复制
         self.target_net.load_state_dict(self.policy_net.state_dict())
         # 切换到评估模式，关闭dropout和batch_norm，因为目标网络本身不训练只接受参数
@@ -126,18 +135,21 @@ class DQNAgent:
         # 将当前 $Q$ 值拆解为当前奖励与未来最大 $Q$ 值的组合，并利用时序差分学习（TD）通过时序差分（TD Error）来逐步修正和逼近这个最优目标
         # 计算td_target作为标签，计算标签的过程不加入计算图
         with torch.no_grad():
-            # max_a' (Q(s', a'))，挑出下一个可能动作a'中Q值最大的并提取Q值
-            next_q = self.target_net(next_states).max(dim=1).values
+            
+            next_actions = self.policy_net(next_states).argmax(dim=1)
+            # Double DQN: 把 next_states 传给 target_net 来计算 Q(s', a')，而不是直接用 policy_net 的最大 Q 值
+            # Y_t = R_{t+1} + gamma * Q_target(s_{t+1}, argmax_a Q_net(s_{t+1}, a))
+            next_q = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
+            # [batch_size, 1]，如果 done 为 True，则不考虑未来奖励
             target_q = rewards + self.gamma * next_q * (1.0 - dones)
 
         # 均方差损失
         loss = self.loss_fn(current_q, target_q)
 
-        # 清空梯度
         self.optimizer.zero_grad()
         # 反向传播，计算所有参数的梯度
         loss.backward()
-        # 梯度裁剪，按比例缩小参数，让它的最大大番薯不超过10.0
+        # 梯度裁剪，按比例缩小参数，让它的最大2范数不超过10.0
         nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
         # 更新参数
         self.optimizer.step()
@@ -179,7 +191,9 @@ class DQNAgent:
                 # 状态向量维度，方便加载时检查环境和模型是否匹配。
                 "state_size": self.state_size,
                 # 动作数量，方便加载时检查环境和模型是否匹配。
+                "hidden_size": self.hidden_size,
                 "action_size": self.action_size,
+                "dueling": self.dueling,
             },
             path,
         )
@@ -188,7 +202,26 @@ class DQNAgent:
     def load(self, path: str | Path) -> None:
         # 把断点中的数据加载到当前设备上
         checkpoint = torch.load(path, map_location=self.device)
-        self.policy_net.load_state_dict(checkpoint["policy_net"])
-        self.target_net.load_state_dict(checkpoint.get("target_net", checkpoint["policy_net"]))
+        policy_state = checkpoint["policy_net"]
+        checkpoint_dueling = bool(
+            checkpoint.get("dueling", not any(key.startswith("net.") for key in policy_state))
+        )
+        checkpoint_hidden_size = int(checkpoint.get("hidden_size", self.hidden_size))
+        # 如果checkpoint中的权重和当前网络不适配，则重建网络来适配权重。
+        if checkpoint_dueling != self.dueling or checkpoint_hidden_size != self.hidden_size:
+            self.dueling = checkpoint_dueling
+            self.hidden_size = checkpoint_hidden_size
+            self.policy_net = QNetwork(
+                self.state_size, self.hidden_size, self.action_size, dueling=self.dueling
+            ).to(self.device)
+            self.target_net = QNetwork(
+                self.state_size, self.hidden_size, self.action_size, dueling=self.dueling
+            ).to(self.device)
+            self.target_net.eval()
+            self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
+
+        # 正常加载权重到网络。
+        self.policy_net.load_state_dict(policy_state)
+        self.target_net.load_state_dict(checkpoint.get("target_net", policy_state))
         self.epsilon = float(checkpoint.get("epsilon", self.epsilon_end))
         self.learn_steps = int(checkpoint.get("learn_steps", 0))
