@@ -28,6 +28,26 @@ def test_state_includes_normalized_distance_features() -> None:
     assert state[18] == 1.0
 
 
+def test_grid_state_contains_map_channels_and_direction() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1)
+    env.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
+    env.direction = Direction.RIGHT
+    env.food = Point(4, 3)
+
+    grid, direction = env.get_grid_state()
+
+    assert len(grid) == env.grid_channels
+    assert len(grid[0]) == env.height
+    assert len(grid[0][0]) == env.width
+    assert direction == [0.0, 1.0, 0.0, 0.0]
+    assert grid[0][0][0] == 1.0
+    assert grid[2][2][2] == 1.0
+    assert grid[1][2][1] == 1.0
+    assert grid[3][3][4] == 1.0
+    assert grid[4][2][2] == 1.0
+    assert grid[4][2][0] == 1 / 3
+
+
 def test_step_moves_snake_and_returns_gym_like_tuple() -> None:
     env = SnakeEnv(width=8, height=8, seed=1)
     state = env.reset()

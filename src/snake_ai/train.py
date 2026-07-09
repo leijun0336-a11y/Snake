@@ -22,14 +22,18 @@ except ImportError:
 # 解析启动脚本时的命令行参数
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a DQN agent for Snake.")
-    parser.add_argument("--episodes", type=int, default=TrainConfig.episodes)
+    # 兼容旧参数；如果传入 --episodes，它会覆盖 --max-episodes。
+    parser.add_argument("--episodes", type=int, default=None)
+    # 最大训练局数；早停没有触发时，训练最多跑到这个 episode。
+    parser.add_argument("--max-episodes", type=int, default=TrainConfig.episodes)
     # 是否带渲染训练, action="store_true"表示：启动脚本时写上--render则为True，不写默认为False
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
     parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR)
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
-    # 关闭早停后会严格跑满 --episodes。
+    parser.add_argument("--state-mode", choices=("vector", "grid"), default="vector")
+    # 关闭早停后会严格跑满最大训练局数。
     parser.add_argument("--no-early-stop", action="store_true")
     # 至少训练多少局后，才允许早停判断生效。
     parser.add_argument("--min-episodes", type=int, default=1000)
@@ -40,6 +44,12 @@ def parse_args() -> argparse.Namespace:
     # 如果设置了目标平均分，达到该 mean_score_100 后直接停止训练。
     parser.add_argument("--target-mean-score", type=float, default=None)
     return parser.parse_args()
+
+
+def get_env_state(env: SnakeEnv, state_mode: str):
+    if state_mode == "grid":
+        return env.get_grid_state()
+    return env.get_state()
 
 
 # 统计列表的均值、标准差、最小值、最大值和最后一个值，返回字典
@@ -148,7 +158,16 @@ def format_train_report(
 
 def main() -> None:
     args = parse_args()
-    train_config = TrainConfig(episodes=args.episodes)
+    # --episodes 是旧参数别名；新语义下优先使用 --max-episodes 表示训练上限。
+    max_episodes = args.episodes if args.episodes is not None else args.max_episodes
+    if max_episodes < 1:
+        raise ValueError("max episodes must be at least 1")
+    if args.min_episodes < 1:
+        raise ValueError("min_episodes must be at least 1")
+    if args.min_episodes > max_episodes:
+        raise ValueError("min_episodes must be less than or equal to max episodes")
+
+    train_config = TrainConfig(episodes=max_episodes)
     set_seed(train_config.seed)
     env_config = EnvConfig(width=args.width, height=args.height)
 
@@ -188,7 +207,7 @@ def main() -> None:
     )
     agent = DQNAgent(
         # 状态维度
-        state_size=env.state_size,  
+        state_size=env.grid_state_shape if args.state_mode == "grid" else env.state_size,
         # 动作维度
         action_size=env.action_size, 
         hidden_size=train_config.hidden_size,
@@ -207,6 +226,8 @@ def main() -> None:
         # 隔多少步更新一次目标网络
         # Q训练网络更新一次视为一步，当经验池满后，则等价于贪吃蛇走一步
         target_update_interval=train_config.target_update_interval,   
+        state_mode=args.state_mode,
+        direction_size=env.direction_size,
         seed=train_config.seed,
     )
 
@@ -264,7 +285,8 @@ def main() -> None:
 
         try:
             for episode in range(1, train_config.episodes + 1):
-                state = env.reset()
+                env.reset()
+                state = get_env_state(env, args.state_mode)
                 done = False
                 
                 # 记录一个episode中所有步的loss
@@ -277,7 +299,8 @@ def main() -> None:
                     # 训练时的动作采样
                     action = agent.act(state, training=True)
                     # 环境反馈，info是环境额外返回的信息字典，不直接参与DQN更新
-                    next_state, reward, done, info = env.step(action)
+                    _, reward, done, info = env.step(action)
+                    next_state = get_env_state(env, args.state_mode)
                     # 累加本局每一步的环境奖励，形成单局累计 reward。
                     episode_reward += reward
                     # 加入经验回放池

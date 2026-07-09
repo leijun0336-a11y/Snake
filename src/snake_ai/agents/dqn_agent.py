@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import nn, optim
@@ -15,7 +16,7 @@ class DQNAgent:
     def __init__(
         self,
         # 状态向量维度，由环境的 state_size 决定。
-        state_size: int,
+        state_size: int | tuple[int, int, int],
         # 动作数量，当前为 3：直行、右转、左转。
         action_size: int,
         # Q 网络隐藏层神经元数量。
@@ -38,6 +39,10 @@ class DQNAgent:
         target_update_interval: int = 1000,
         # 是否使用 Dueling DQN 架构，分离状态值和优势值。
         dueling: bool = True,
+        # 状态输入模式：vector 使用人工低维状态，grid 使用多通道网格状态。
+        state_mode: str = "vector",
+        # grid 模式下额外拼接的方向 one-hot 向量维度。
+        direction_size: int = 4,
         # 随机种子，用于让探索、采样和网络初始化尽量可复现。
         seed: int = 42,
         # 计算设备；不传时优先使用 cuda，否则使用 cpu。
@@ -46,6 +51,8 @@ class DQNAgent:
         self.state_size = state_size
         self.action_size = action_size
         self.hidden_size = hidden_size
+        self.state_mode = state_mode
+        self.direction_size = direction_size
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
@@ -60,12 +67,8 @@ class DQNAgent:
         
         # 生成随机数种子
         torch.manual_seed(seed)
-        self.policy_net = QNetwork(state_size, hidden_size, action_size, dueling=dueling).to(
-            self.device
-        )
-        self.target_net = QNetwork(state_size, hidden_size, action_size, dueling=dueling).to(
-            self.device
-        )
+        self.policy_net = self._build_network()
+        self.target_net = self._build_network()
         # load_state_dict() 是一个用来加载模型参数的方法，这里用于参数复制
         self.target_net.load_state_dict(self.policy_net.state_dict())
         # 切换到评估模式，关闭dropout和batch_norm，因为目标网络本身不训练只接受参数
@@ -77,7 +80,7 @@ class DQNAgent:
         self.replay_buffer = ReplayBuffer(replay_buffer_size, seed=seed)
 
     # 动作采样，DQN采用epsilon-greedy
-    def act(self, state: list[float], training: bool = True) -> int:
+    def act(self, state: Any, training: bool = True) -> int:
         # state: 输入的状态；training:是否训练，评估模式不探索。
         
         # 如果正在训练且落入epsilon概率内
@@ -86,7 +89,7 @@ class DQNAgent:
 
         # act()只用于选动作，不参与梯度计算; learn()才需要梯度，因为要训练网络
         with torch.no_grad():
-            state_tensor = torch.tensor([state], dtype=torch.float32, device=self.device)
+            state_tensor = self._state_batch_to_tensor([state])
             q_values = self.policy_net(state_tensor)
             # 返回Q网络输出向量中数值最大值对应的索引
             return int(q_values.argmax(dim=1).item())
@@ -95,13 +98,13 @@ class DQNAgent:
     def remember(
         self,
         # 执行动作前的当前状态。
-        state: list[float],
+        state: Any,
         # 在当前状态下执行的动作。
         action: int,
         # 执行动作后环境返回的奖励。
         reward: float,
         # 执行动作后环境返回的下一个状态。
-        next_state: list[float],
+        next_state: Any,
         # 执行动作后这一局是否结束。
         done: bool,
     ) -> None:
@@ -118,12 +121,10 @@ class DQNAgent:
         batch = self.replay_buffer.sample(self.batch_size)
 
         # 提取batch中的信息
-        states = torch.tensor([item.state for item in batch], dtype=torch.float32, device=self.device)
+        states = self._state_batch_to_tensor([item.state for item in batch])
         actions = torch.tensor([item.action for item in batch], dtype=torch.long, device=self.device)
         rewards = torch.tensor([item.reward for item in batch], dtype=torch.float32, device=self.device)
-        next_states = torch.tensor(
-            [item.next_state for item in batch], dtype=torch.float32, device=self.device
-        )
+        next_states = self._state_batch_to_tensor([item.next_state for item in batch])
         dones = torch.tensor([item.done for item in batch], dtype=torch.float32, device=self.device)
 
         # policy_net(states): 每个状态下，所有动作的 Q 值[batch_size, action_dim(可选动作数)]
@@ -173,6 +174,27 @@ class DQNAgent:
     def update_target_network(self) -> None:
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
+    def _build_network(self) -> QNetwork:
+        return QNetwork(
+            self.state_size,
+            self.hidden_size,
+            self.action_size,
+            dueling=self.dueling,
+            state_mode=self.state_mode,
+            direction_size=self.direction_size,
+        ).to(self.device)
+
+    def _state_batch_to_tensor(
+        self, states: list[Any]
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if self.state_mode == "grid":
+            grids = torch.tensor([state[0] for state in states], dtype=torch.float32, device=self.device)
+            directions = torch.tensor(
+                [state[1] for state in states], dtype=torch.float32, device=self.device
+            )
+            return grids, directions
+        return torch.tensor(states, dtype=torch.float32, device=self.device)
+
     # 把当前训练状态存到文件里
     def save(self, path: str | Path) -> None:
         path = Path(path)
@@ -191,6 +213,8 @@ class DQNAgent:
                 "learn_steps": self.learn_steps,
                 # 状态向量维度，方便加载时检查环境和模型是否匹配。
                 "state_size": self.state_size,
+                "state_mode": self.state_mode,
+                "direction_size": self.direction_size,
                 # 动作数量，方便加载时检查环境和模型是否匹配。
                 "hidden_size": self.hidden_size,
                 "action_size": self.action_size,
@@ -208,23 +232,33 @@ class DQNAgent:
             checkpoint.get("dueling", not any(key.startswith("net.") for key in policy_state))
         )
         checkpoint_hidden_size = int(checkpoint.get("hidden_size", self.hidden_size))
-        checkpoint_state_size = int(checkpoint.get("state_size", self.state_size))
+        checkpoint_state_size = checkpoint.get("state_size", self.state_size)
+        if isinstance(checkpoint_state_size, list):
+            checkpoint_state_size = tuple(checkpoint_state_size)
+        checkpoint_state_mode = str(checkpoint.get("state_mode", "vector"))
+        checkpoint_direction_size = int(checkpoint.get("direction_size", self.direction_size))
         if checkpoint_state_size != self.state_size:
             raise ValueError(
                 f"Checkpoint state_size={checkpoint_state_size} does not match "
                 f"current agent state_size={self.state_size}. Retrain the model after "
                 "changing the environment state features."
             )
+        if checkpoint_state_mode != self.state_mode:
+            raise ValueError(
+                f"Checkpoint state_mode={checkpoint_state_mode!r} does not match "
+                f"current agent state_mode={self.state_mode!r}."
+            )
+        if checkpoint_direction_size != self.direction_size:
+            raise ValueError(
+                f"Checkpoint direction_size={checkpoint_direction_size} does not match "
+                f"current agent direction_size={self.direction_size}."
+            )
         # 如果checkpoint中的权重和当前网络不适配，则重建网络来适配权重。
         if checkpoint_dueling != self.dueling or checkpoint_hidden_size != self.hidden_size:
             self.dueling = checkpoint_dueling
             self.hidden_size = checkpoint_hidden_size
-            self.policy_net = QNetwork(
-                self.state_size, self.hidden_size, self.action_size, dueling=self.dueling
-            ).to(self.device)
-            self.target_net = QNetwork(
-                self.state_size, self.hidden_size, self.action_size, dueling=self.dueling
-            ).to(self.device)
+            self.policy_net = self._build_network()
+            self.target_net = self._build_network()
             self.target_net.eval()
             self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
 

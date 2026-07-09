@@ -61,6 +61,12 @@ Windows PowerShell：
 uv run python -m snake_ai.train
 ```
 
+训练多通道网格 CNN state：
+
+```bash
+uv run python -m snake_ai.train --state-mode grid
+```
+
 训练产物：
 
 - `checkpoints/<run_name>/best.pt`
@@ -70,7 +76,7 @@ uv run python -m snake_ai.train
 
 训练日志会记录 `score`、`mean_score_100`、`episode_reward`、`mean_reward_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。其中 `loss` 是 Huber loss。
 
-训练默认启用早停策略。早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes` 局；之后如果连续 `--patience` 局没有超过 `--min-delta` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止。
+训练默认启用早停策略。默认最多训练 `--max-episodes=5000` 局，早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes=1000` 局；之后如果连续 `--patience=500` 局没有超过 `--min-delta=0.5` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止。
 
 ## 评估
 
@@ -93,12 +99,14 @@ uv run python -m snake_ai.evaluate
 
 训练参数：
 
-- `--episodes`：训练 episode 数量。
+- `--max-episodes`：最大训练 episode 数量；早停没有触发时，训练达到该上限后结束。
+- `--episodes`：兼容旧用法，等价于覆盖 `--max-episodes`。
 - `--render`：训练时打开 pygame 渲染窗口。
 - `--width`：游戏网格宽度。
 - `--height`：游戏网格高度。
 - `--checkpoint-dir`：checkpoint 输出目录。
 - `--runs-dir`：训练日志输出目录。
+- `--state-mode`：状态输入模式，`vector` 使用 19 维人工特征，`grid` 使用多通道网格和小型 CNN；默认 `vector`。
 - `--no-early-stop`：关闭训练早停。
 - `--min-episodes`：早停生效前至少训练的 episode 数量。
 - `--patience`：超过最小训练局数后，允许连续多少个 episode 没有有效提升。
@@ -114,6 +122,7 @@ uv run python -m snake_ai.evaluate
 - `--height`：游戏网格高度。
 - `--tensorboard`：写入 TensorBoard 评估日志和 `eval_metrics.csv`。
 - `--eval-output-dir`：指定评估指标输出目录。
+- `--state-mode`：指定评估状态输入模式；不指定时会从 checkpoint 自动读取。
 
 TensorBoard 参数：
 
@@ -156,7 +165,24 @@ TensorBoard 参数：
 | 18 | `body_distance_right` | 右转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 | 19 | `body_distance_left` | 左转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 
-state 维度从 11 改为 19 后，旧的 11 维 checkpoint 不能直接加载，需要重新训练。
+`SnakeEnv.get_grid_state()` 返回多通道网格状态，作为 CNN Q 网络输入：
+
+| 部分 | 形状 | 含义 |
+|------|------|------|
+| grid | `[5, height, width]` | 多通道符号网格。 |
+| direction | `[4]` | 当前方向 one-hot，顺序为 left、right、up、down。 |
+
+grid 通道说明：
+
+| 通道 | 含义 |
+|------|------|
+| 0 | 边界格子。 |
+| 1 | 蛇身，不含蛇头。 |
+| 2 | 蛇头。 |
+| 3 | 食物。 |
+| 4 | 蛇身顺序，蛇头为 `1.0`，越靠近尾巴数值越小。 |
+
+默认 `--state-mode vector` 保留 19 维 MLP baseline；`--state-mode grid` 使用轻量 CNN + Dueling head。不同 state mode 的 checkpoint 不能混用。
 
 ## 指标说明
 

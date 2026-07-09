@@ -11,6 +11,8 @@ import statistics
 import time
 from pathlib import Path
 
+import torch
+
 from snake_ai.agents import DQNAgent
 from snake_ai.config import CHECKPOINT_DIR, RUNS_DIR, EnvConfig, TrainConfig
 from snake_ai.game import SnakeEnv
@@ -35,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tensorboard", action="store_true")
     # 指定评估指标输出目录；不指定时默认绑定到最近一次训练的 runs/dqn_* 目录。
     parser.add_argument("--eval-output-dir", type=Path, default=None)
+    parser.add_argument("--state-mode", choices=("vector", "grid"), default=None)
     return parser.parse_args()
 
 
@@ -110,6 +113,17 @@ def format_eval_report(
     return "\n".join(lines)
 
 
+def get_checkpoint_state_mode(checkpoint_path: Path) -> str:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    return str(checkpoint.get("state_mode", "vector"))
+
+
+def get_env_state(env: SnakeEnv, state_mode: str):
+    if state_mode == "grid":
+        return env.get_grid_state()
+    return env.get_state()
+
+
 def main() -> None:
     args = parse_args()
     train_config = TrainConfig()
@@ -118,6 +132,7 @@ def main() -> None:
     
     # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 best.pt。
     checkpoint_path = args.checkpoint or find_latest_best_checkpoint()
+    state_mode = args.state_mode or get_checkpoint_state_mode(checkpoint_path)
 
     # ---- 确定评估日志输出目录 ----
     output_dir: Path | None = None
@@ -136,6 +151,7 @@ def main() -> None:
     csv_path = output_dir / "eval_metrics.csv" if output_dir is not None else None
 
     print(f"checkpoint={checkpoint_path}")
+    print(f"state_mode={state_mode}")
     if output_dir is not None:
         print(f"output_dir={output_dir}")
 
@@ -151,7 +167,7 @@ def main() -> None:
     )
     agent = DQNAgent(
         # 状态维度
-        state_size=env.state_size,
+        state_size=env.grid_state_shape if state_mode == "grid" else env.state_size,
         # 动作维度
         action_size=env.action_size,
         hidden_size=train_config.hidden_size,
@@ -159,6 +175,8 @@ def main() -> None:
         epsilon_start=0.0,
         # epsilon值的下限(评估时Epsilon-Greedy关闭)
         epsilon_end=0.0,
+        state_mode=state_mode,
+        direction_size=env.direction_size,
         seed=train_config.seed,
     )
 
@@ -188,7 +206,8 @@ def main() -> None:
                 )
 
         for episode in range(1, args.episodes + 1):
-            state = env.reset()
+            env.reset()
+            state = get_env_state(env, state_mode)
             done = False
             info = {"score": 0}
             # 每局开始时蛇身长度为3(初始值)，后续吃到食物会增长
@@ -197,7 +216,8 @@ def main() -> None:
             # 评估时只进行动作采样和环境反馈。
             while not done:
                 action = agent.act(state, training=False)
-                state, _, done, info = env.step(action)
+                _, _, done, info = env.step(action)
+                state = get_env_state(env, state_mode)
                 # 每步记录蛇身长度，追踪本局峰值
                 current_length = int(info["snake_length"])
                 if current_length > max_snake_length:
