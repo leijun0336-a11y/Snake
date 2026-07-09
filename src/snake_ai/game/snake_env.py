@@ -25,8 +25,8 @@ class SnakeEnv:
 
     # 动作维度
     action_size = 3
-    # 状态维度
-    state_size = 11
+    # 状态维度：11 个原始方向/危险特征 + 8 个距离特征。
+    state_size = 19
 
     def __init__(
         self,
@@ -69,7 +69,7 @@ class SnakeEnv:
         self.frame_iteration = 0
         self.reset()
 
-    def reset(self) -> list[int]:
+    def reset(self) -> list[float]:
         center = Point(self.width // 2, self.height // 2)
         self.direction = Direction.RIGHT
         
@@ -86,7 +86,7 @@ class SnakeEnv:
         return self.get_state()
 
     # 让环境根据一个动作向前推进一步: 给蛇一个动作 -> 蛇走一格 -> 环境返回这一步的结果
-    def step(self, action: int) -> tuple[list[int], float, bool, dict[str, int]]:
+    def step(self, action: int) -> tuple[list[float], float, bool, dict[str, int]]:
         if action not in (0, 1, 2):
             raise ValueError("action must be 0 (straight), 1 (right), or 2 (left)")
 
@@ -123,7 +123,7 @@ class SnakeEnv:
         return self.get_state(), reward, done, self._get_info()
 
     # 把当前游戏局面转换成DQN能输入的状态向量。
-    def get_state(self) -> list[int]:
+    def get_state(self) -> list[float]:
         # 蛇头位置，是判断危险和食物方向的参考点。
         head = self.snake[0]
         # 蛇当前移动的绝对方向。
@@ -135,6 +135,9 @@ class SnakeEnv:
         right = self._next_point(self._turn(direction, 1))
         # 如果相对当前方向左转，下一格蛇头会到达的位置坐标。
         left = self._next_point(self._turn(direction, -1))
+        straight_direction = direction
+        right_direction = self._turn(direction, 1)
+        left_direction = self._turn(direction, -1)
 
         return [
             # 1. 直行方向是否危险：下一格是否会撞墙或撞到自己。
@@ -159,6 +162,22 @@ class SnakeEnv:
             int(self.food.y < head.y),
             # 11. 食物是否在蛇头下方，也就是食物 y 坐标是否更大。
             int(self.food.y > head.y),
+            # 12. 食物相对蛇头的 x 距离，归一化到 [-1, 1]。
+            (self.food.x - head.x) / max(self.width - 1, 1),
+            # 13. 食物相对蛇头的 y 距离，归一化到 [-1, 1]。
+            (self.food.y - head.y) / max(self.height - 1, 1),
+            # 14. 直行方向到墙的距离，值越大表示前方空间越宽。
+            self._wall_distance_norm(straight_direction),
+            # 15. 右转方向到墙的距离。
+            self._wall_distance_norm(right_direction),
+            # 16. 左转方向到墙的距离。
+            self._wall_distance_norm(left_direction),
+            # 17. 直行方向最近身体距离；没有身体时为 1.0。
+            self._body_distance_norm(straight_direction),
+            # 18. 右转方向最近身体距离；没有身体时为 1.0。
+            self._body_distance_norm(right_direction),
+            # 19. 左转方向最近身体距离；没有身体时为 1.0。
+            self._body_distance_norm(left_direction),
         ]
 
     # 判断是否撞墙或者吃到蛇自己。这里是严格判断，会把当前尾巴也算作身体。
@@ -224,6 +243,47 @@ class SnakeEnv:
         if direction == Direction.DOWN:
             return Point(head.x, head.y + 1)
         return Point(head.x, head.y - 1)
+
+    # 计算给定方向对应的坐标增量。
+    @staticmethod
+    def _direction_delta(direction: Direction) -> tuple[int, int]:
+        if direction == Direction.RIGHT:
+            return 1, 0
+        if direction == Direction.LEFT:
+            return -1, 0
+        if direction == Direction.DOWN:
+            return 0, 1
+        return 0, -1
+
+    # 计算从蛇头沿给定方向到墙之前还有多少空格，并按该轴最大距离归一化。
+    def _wall_distance_norm(self, direction: Direction) -> float:
+        head = self.snake[0]
+        if direction == Direction.RIGHT:
+            return (self.width - 1 - head.x) / max(self.width - 1, 1)
+        if direction == Direction.LEFT:
+            return head.x / max(self.width - 1, 1)
+        if direction == Direction.DOWN:
+            return (self.height - 1 - head.y) / max(self.height - 1, 1)
+        return head.y / max(self.height - 1, 1)
+
+    # 计算从蛇头沿给定方向到最近身体的距离；如果该方向没有身体，返回 1.0。
+    def _body_distance_norm(self, direction: Direction) -> float:
+        head = self.snake[0]
+        dx, dy = self._direction_delta(direction)
+        max_distance = (
+            max(self.width - 1, 1)
+            if direction in (Direction.RIGHT, Direction.LEFT)
+            else max(self.height - 1, 1)
+        )
+        body = set(self.snake[1:])
+
+        for distance in range(1, max_distance + 1):
+            point = Point(head.x + dx * distance, head.y + dy * distance)
+            if point.x < 0 or point.x >= self.width or point.y < 0 or point.y >= self.height:
+                break
+            if point in body:
+                return distance / max_distance
+        return 1.0
 
     # 调用静态方法：不需要创建实例，直接用 类名.方法名() 就能用
     # 因为它不需要访问当前环境对象 self 里的任何状态

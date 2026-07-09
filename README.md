@@ -130,6 +130,34 @@ TensorBoard 参数：
 
 评估脚本会基于这些即时指标继续计算 `score_per_step`、`max_snake_length`、平均分等汇总指标。
 
+## 环境 state
+
+`SnakeEnv.get_state()` 返回 19 维低维状态向量，作为 Q 网络输入：
+
+| 序号 | 维度 | 含义 |
+|------|------|------|
+| 1 | `danger_straight` | 直行下一步是否危险。 |
+| 2 | `danger_right` | 右转下一步是否危险。 |
+| 3 | `danger_left` | 左转下一步是否危险。 |
+| 4 | `direction_left` | 当前是否向左移动。 |
+| 5 | `direction_right` | 当前是否向右移动。 |
+| 6 | `direction_up` | 当前是否向上移动。 |
+| 7 | `direction_down` | 当前是否向下移动。 |
+| 8 | `food_left` | 食物是否在蛇头左侧。 |
+| 9 | `food_right` | 食物是否在蛇头右侧。 |
+| 10 | `food_up` | 食物是否在蛇头上方。 |
+| 11 | `food_down` | 食物是否在蛇头下方。 |
+| 12 | `food_dx_norm` | 食物相对蛇头的 x 距离，归一化到 `[-1, 1]`。 |
+| 13 | `food_dy_norm` | 食物相对蛇头的 y 距离，归一化到 `[-1, 1]`。 |
+| 14 | `wall_distance_straight` | 直行方向到墙的归一化距离。 |
+| 15 | `wall_distance_right` | 右转方向到墙的归一化距离。 |
+| 16 | `wall_distance_left` | 左转方向到墙的归一化距离。 |
+| 17 | `body_distance_straight` | 直行方向最近身体的归一化距离；没有身体时为 `1.0`。 |
+| 18 | `body_distance_right` | 右转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
+| 19 | `body_distance_left` | 左转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
+
+state 维度从 11 改为 19 后，旧的 11 维 checkpoint 不能直接加载，需要重新训练。
+
 ## 指标说明
 
 训练指标：

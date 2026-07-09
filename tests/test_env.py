@@ -6,7 +6,26 @@ def test_reset_returns_expected_state_size() -> None:
     state = env.reset()
 
     assert len(state) == env.state_size
-    assert all(value in (0, 1) for value in state)
+    assert env.state_size == 19
+    assert all(-1.0 <= value <= 1.0 for value in state)
+
+
+def test_state_includes_normalized_distance_features() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1)
+    env.snake = [Point(2, 2), Point(1, 2), Point(0, 2), Point(2, 3)]
+    env.direction = Direction.RIGHT
+    env.food = Point(5, 0)
+
+    state = env.get_state()
+
+    assert state[11] == 0.6
+    assert state[12] == -0.4
+    assert state[13] == 0.6
+    assert state[14] == 0.6
+    assert state[15] == 0.4
+    assert state[16] == 1.0
+    assert state[17] == 0.2
+    assert state[18] == 1.0
 
 
 def test_step_moves_snake_and_returns_gym_like_tuple() -> None:

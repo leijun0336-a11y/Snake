@@ -14,7 +14,7 @@ from snake_ai.models.q_network import QNetwork
 class DQNAgent:
     def __init__(
         self,
-        # 状态向量维度，当前贪吃蛇环境是 11 个输入特征。
+        # 状态向量维度，由环境的 state_size 决定。
         state_size: int,
         # 动作数量，当前为 3：直行、右转、左转。
         action_size: int,
@@ -208,6 +208,13 @@ class DQNAgent:
             checkpoint.get("dueling", not any(key.startswith("net.") for key in policy_state))
         )
         checkpoint_hidden_size = int(checkpoint.get("hidden_size", self.hidden_size))
+        checkpoint_state_size = int(checkpoint.get("state_size", self.state_size))
+        if checkpoint_state_size != self.state_size:
+            raise ValueError(
+                f"Checkpoint state_size={checkpoint_state_size} does not match "
+                f"current agent state_size={self.state_size}. Retrain the model after "
+                "changing the environment state features."
+            )
         # 如果checkpoint中的权重和当前网络不适配，则重建网络来适配权重。
         if checkpoint_dueling != self.dueling or checkpoint_hidden_size != self.hidden_size:
             self.dueling = checkpoint_dueling
