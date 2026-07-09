@@ -72,7 +72,8 @@ class DQNAgent:
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
-        self.loss_fn = nn.MSELoss()
+        # DQN 常用 Huber loss；相比 MSE，它会降低大 TD error 对梯度的冲击。
+        self.loss_fn = nn.SmoothL1Loss()
         self.replay_buffer = ReplayBuffer(replay_buffer_size, seed=seed)
 
     # 动作采样，DQN采用epsilon-greedy
@@ -143,7 +144,7 @@ class DQNAgent:
             # [batch_size, 1]，如果 done 为 True，则不考虑未来奖励
             target_q = rewards + self.gamma * next_q * (1.0 - dones)
 
-        # 均方差损失
+        # Huber loss 用于降低离群 TD error 对训练稳定性的影响。
         loss = self.loss_fn(current_q, target_q)
 
         self.optimizer.zero_grad()

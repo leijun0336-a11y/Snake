@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import statistics
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +30,65 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR)
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
     return parser.parse_args()
+
+
+# 统计列表的均值、标准差、最小值、最大值和最后一个值，返回字典
+def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
+    return {
+        "mean": statistics.fmean(values),
+        "std": statistics.pstdev(values) if len(values) > 1 else 0.0,
+        "min": float(min(values)),
+        "max": float(max(values)),
+        "last": float(values[-1]),
+    }
+
+
+# 生成训练报告的文本内容，供 TensorBoard 显示
+def format_train_report(
+    run_name: str,
+    episodes: int,
+    total_time_sec: float,
+    best_score: int,
+    best_mean_score: float,
+    scores: list[int],
+    episode_steps: list[int],
+    score_per_steps: list[float],
+    mean_scores: list[float],
+    episode_rewards: list[float],
+    mean_rewards: list[float],
+    losses: list[float],
+    mean_loss_100s: list[float],
+    epsilons: list[float],
+    replay_buffer_sizes: list[int],
+) -> str:
+    summaries = {
+        "score": summarize_values(scores),
+        "episode_steps": summarize_values(episode_steps),
+        "score_per_step": summarize_values(score_per_steps),
+        "mean_score_100": summarize_values(mean_scores),
+        "episode_reward": summarize_values(episode_rewards),
+        "mean_reward_100": summarize_values(mean_rewards),
+        "loss": summarize_values(losses),
+        "mean_loss_100": summarize_values(mean_loss_100s),
+        "epsilon": summarize_values(epsilons),
+        "replay_buffer_size": summarize_values(replay_buffer_sizes),
+    }
+    lines = [
+        f"Run: `{run_name}`",
+        f"Episodes: `{episodes}`",
+        f"Total time: `{total_time_sec:.3f} sec`",
+        f"Best score: `{best_score}`",
+        f"Best mean_score_100: `{best_mean_score:.4f}`",
+        "",
+        "| Metric | Mean | Std | Min | Max | Last |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for name, summary in summaries.items():
+        lines.append(
+            f"| {name} | {summary['mean']:.4f} | {summary['std']:.4f} | "
+            f"{summary['min']:.4f} | {summary['max']:.4f} | {summary['last']:.4f} |"
+        )
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -93,10 +154,34 @@ def main() -> None:
         seed=train_config.seed,
     )
 
+    # 每局得分历史，用于计算 mean_score_100 和生成 train/report。
     scores: list[int] = []
+    # 每局存活步数历史，用于生成 train/report。
+    episode_steps_history: list[int] = []
+    # 每局吃食效率历史，用于生成 train/report。
+    score_per_steps: list[float] = []
+    # 每局结束时的最近 100 局平均分历史，用于生成 train/report。
+    mean_scores: list[float] = []
+    # 每局累计环境奖励历史，用于观察 reward 信号和游戏分数 score 的差异。
+    episode_rewards: list[float] = []
+    # 每局结束时的最近 100 局平均累计奖励历史，用于生成 train/report。
+    mean_rewards: list[float] = []
+    # 每局平均 loss 历史，用于生成 train/report 中的 loss 摘要。
+    losses_history: list[float] = []
+    # 每局平均 loss 历史，用于计算滚动的 mean_loss_100。
     mean_losses: list[float] = []
+    # 每局结束时的 mean_loss_100 历史，用于生成 train/report。
+    mean_loss_100s: list[float] = []
+    # 每局结束后的 epsilon 历史，用于生成 train/report。
+    epsilons: list[float] = []
+    # 每局结束时的经验池大小历史，用于生成 train/report。
+    replay_buffer_sizes: list[int] = []
+    # 历史单局最高分，仅用于终端输出观察。
     best_score = -1
+    # 历史最高 mean_score_100，用于决定何时保存 best.pt。
     best_mean_score = float("-inf")
+    # 训练开始时间，用于计算 train/report 中的总耗时。
+    train_start_time = time.perf_counter()
 
     # 在 CSV 文件中写入训练指标表头
     with csv_path.open("w", newline="", encoding="utf-8") as file:
@@ -107,6 +192,8 @@ def main() -> None:
                 "score",
                 "score_per_step",
                 "mean_score_100",
+                "episode_reward",
+                "mean_reward_100",
                 "episode_steps",
                 "epsilon",
                 "loss",
@@ -122,6 +209,8 @@ def main() -> None:
                 
                 # 记录一个episode中所有步的loss
                 losses: list[float] = []
+                # 记录一个 episode 中所有 step 的 reward 总和，和 score 分开观察。
+                episode_reward = 0.0
 
                 # 一次episode训练
                 while not done:
@@ -129,6 +218,8 @@ def main() -> None:
                     action = agent.act(state, training=True)
                     # 环境反馈，info是环境额外返回的信息字典，不直接参与DQN更新
                     next_state, reward, done, info = env.step(action)
+                    # 累加本局每一步的环境奖励，形成单局累计 reward。
+                    episode_reward += reward
                     # 加入经验回放池
                     agent.remember(state, action, reward, next_state, done)
                     # 智能体更新Q值，如果经验回放池没达到batch_size则返回None
@@ -146,6 +237,10 @@ def main() -> None:
                 # 记录最近最多100次获得的游戏的平均分
                 # 注意游戏的分数和环境的奖励是不同的概念，一个是指标，一个是训练信号
                 mean_score = sum(scores[-100:]) / min(len(scores), 100)
+                # 记录单局累计 reward，并计算最近最多 100 局的平均累计 reward。
+                episode_rewards.append(episode_reward)
+                mean_reward = sum(episode_rewards[-100:]) / min(len(episode_rewards), 100)
+                mean_rewards.append(mean_reward)
                 # episode_steps 用来区分“很快撞死”和“走了很久但没吃到食物”。
                 episode_steps = int(info["steps"])
                 # 吃食效率 = 吃到的食物数 / 存活步数，衡量策略是否直奔目标
@@ -154,6 +249,13 @@ def main() -> None:
                 mean_loss = sum(losses) / len(losses) if losses else 0.0
                 mean_losses.append(mean_loss)
                 mean_loss_100 = sum(mean_losses[-100:]) / min(len(mean_losses), 100)
+                episode_steps_history.append(episode_steps)
+                score_per_steps.append(score_per_step)
+                mean_scores.append(mean_score)
+                losses_history.append(mean_loss)
+                mean_loss_100s.append(mean_loss_100)
+                epsilons.append(agent.epsilon)
+                replay_buffer_sizes.append(len(agent.replay_buffer))
 
                 # 存下得分最高时的参数
                 if score > best_score:
@@ -174,6 +276,10 @@ def main() -> None:
                     # 最近100局滑动平均分
                     writer.add_scalar("train/mean_score_100", mean_score, episode)
                     writer.add_scalar("train/best_mean_score_100", best_mean_score, episode)
+                    # 本局累计环境奖励
+                    writer.add_scalar("train/episode_reward", episode_reward, episode)
+                    # 最近100局滑动平均累计环境奖励
+                    writer.add_scalar("train/mean_reward_100", mean_reward, episode)
                     # 本局存活步数
                     writer.add_scalar("train/episode_steps", episode_steps, episode)
                     # 当前探索率
@@ -191,6 +297,8 @@ def main() -> None:
                         score,
                         f"{score_per_step:.6f}",
                         f"{mean_score:.4f}",
+                        f"{episode_reward:.4f}",
+                        f"{mean_reward:.4f}",
                         episode_steps,
                         f"{agent.epsilon:.6f}",
                         mean_loss,
@@ -208,12 +316,35 @@ def main() -> None:
                 # 每个episode输出一次指标信息
                 print(
                     f"episode={episode:4d} score={score:3d} "
+                    f"reward={episode_reward:6.1f} "
                     f"mean100={mean_score:6.2f} epsilon={agent.epsilon:.3f} "
                     f"loss={mean_loss:.4f} best_score={best_score}"
                 )
         finally:  # 无论上面是否跑完，这段代码都必须执行。
             env.close()
             if writer is not None:
+                if scores:
+                    writer.add_text(
+                        "train/report",
+                        format_train_report(
+                            run_name=run_name,
+                            episodes=len(scores),
+                            total_time_sec=time.perf_counter() - train_start_time,
+                            best_score=best_score,
+                            best_mean_score=best_mean_score,
+                            scores=scores,
+                            episode_steps=episode_steps_history,
+                            score_per_steps=score_per_steps,
+                            mean_scores=mean_scores,
+                            episode_rewards=episode_rewards,
+                            mean_rewards=mean_rewards,
+                            losses=losses_history,
+                            mean_loss_100s=mean_loss_100s,
+                            epsilons=epsilons,
+                            replay_buffer_sizes=replay_buffer_sizes,
+                        ),
+                        global_step=len(scores),
+                    )
                 writer.close()
 
 

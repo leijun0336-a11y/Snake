@@ -66,9 +66,9 @@ uv run python -m snake_ai.train
 - `checkpoints/<run_name>/best.pt`
 - `checkpoints/<run_name>/latest.pt`
 - `runs/<run_name>/train_metrics.csv`
-- TensorBoard 训练日志，event 文件名带有 `.train` 后缀
+- TensorBoard 训练日志，event 文件名带有 `.train` 后缀，包含逐局标量和 `train/report` 文本摘要
 
-训练日志会记录 `score`、`mean_score_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。
+训练日志会记录 `score`、`mean_score_100`、`episode_reward`、`mean_reward_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。其中 `loss` 是 Huber loss。
 
 ## 评估
 
@@ -83,7 +83,7 @@ uv run python -m snake_ai.evaluate
 评估产物默认绑定到被评估 checkpoint 对应的 `runs/<run_name>` 目录：
 
 - `eval_metrics.csv`：追加记录每一局的 `score`、`steps`、`score_per_step` 和 `max_snake_length`
-- TensorBoard 评估日志，event 文件名带有 `.eval` 后缀
+- TensorBoard 评估日志，event 文件名带有 `.eval` 后缀，包含逐局标量和 `eval/report` 文本摘要
 
 多次运行评估时，新的测试指标会继续追加到同一个训练目录，不会覆盖旧记录。
 
@@ -139,7 +139,7 @@ http://localhost:6006
 
 `runs/<run_name>/` 里可能同时包含训练和评估 event 文件：
 
-- `.train` 后缀：训练指标，例如 `train/score`、`train/loss`、`train/mean_score_100`
+- `.train` 后缀：训练指标，例如 `train/score`、`train/episode_reward`、`train/loss`、`train/mean_score_100`
 - `.eval` 后缀：评估指标，例如 `eval/score`、`eval/steps`、`eval/score_per_step`、`eval/max_snake_length`
 
 ## 可复现性

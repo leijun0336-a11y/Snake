@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import statistics
+import time
 from pathlib import Path
 
 from snake_ai.agents import DQNAgent
@@ -66,6 +68,46 @@ def find_run_dir_for_checkpoint(checkpoint_path: Path, runs_dir: Path = RUNS_DIR
     if run_name.startswith("dqn_"):
         return runs_dir / run_name
     return find_latest_run_dir(runs_dir)
+
+
+def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
+    return {
+        "mean": statistics.fmean(values),
+        "std": statistics.pstdev(values) if len(values) > 1 else 0.0,
+        "min": float(min(values)),
+        "max": float(max(values)),
+    }
+
+
+def format_eval_report(
+    checkpoint_path: Path,
+    episodes: int,
+    total_time_sec: float,
+    scores: list[int],
+    steps: list[int],
+    score_per_steps: list[float],
+    max_lengths: list[int],
+) -> str:
+    summaries = {
+        "score": summarize_values(scores),
+        "steps": summarize_values(steps),
+        "score_per_step": summarize_values(score_per_steps),
+        "max_snake_length": summarize_values(max_lengths),
+    }
+    lines = [
+        f"Checkpoint: `{checkpoint_path}`",
+        f"Episodes: `{episodes}`",
+        f"Total time: `{total_time_sec:.3f} sec`",
+        "",
+        "| Metric | Mean | Std | Min | Max |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, summary in summaries.items():
+        lines.append(
+            f"| {name} | {summary['mean']:.4f} | {summary['std']:.4f} | "
+            f"{summary['min']:.4f} | {summary['max']:.4f} |"
+        )
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -128,6 +170,7 @@ def main() -> None:
     max_lengths: list[int] = []
     score_per_steps: list[float] = []
     csv_file = None
+    eval_start_time = time.perf_counter()
     try:
         if csv_path is not None:
             csv_file = csv_path.open("a", newline="", encoding="utf-8")
@@ -198,6 +241,21 @@ def main() -> None:
                     ]
                 )
                 csv_file.flush()
+        if scores and writer is not None:
+            total_time_sec = time.perf_counter() - eval_start_time
+            writer.add_text(
+                "eval/report",
+                format_eval_report(
+                    checkpoint_path=checkpoint_path,
+                    episodes=len(scores),
+                    total_time_sec=total_time_sec,
+                    scores=scores,
+                    steps=steps,
+                    score_per_steps=score_per_steps,
+                    max_lengths=max_lengths,
+                ),
+                global_step=len(scores),
+            )
     finally:
         env.close()
         if writer is not None:
