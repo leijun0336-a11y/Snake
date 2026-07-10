@@ -27,7 +27,7 @@ class QNetwork(nn.Module):
         output_size: int,
         dueling: bool = True,
         state_mode: str = "vector",
-        auxiliary_size: int = 19,
+        auxiliary_size: int = 20,
         cnn_channels: int = 32,
         cnn_output_channels: int = 16,
         cnn_dilations: tuple[int, ...] = (1, 2, 4),
@@ -49,7 +49,7 @@ class QNetwork(nn.Module):
         self.state_mode = state_mode
 
         if state_mode == "vector":
-            # Vector baseline 只处理环境提供的 19 维人工状态，不经过 CNN。
+            # Vector baseline 只处理环境提供的 20 维人工状态，不经过 CNN。
             if not isinstance(input_size, int):
                 raise TypeError("vector state mode expects an integer input_size")
             self.feature = nn.Sequential(
@@ -87,7 +87,7 @@ class QNetwork(nn.Module):
 
             # 展平维度由压缩通道数和池化尺寸推导，调整 CNN 配置时无需手工同步。
             cnn_feature_size = cnn_output_channels * cnn_pool_size[0] * cnn_pool_size[1]
-            # Hybrid 比纯 Grid 多拼接完整的 19 维人工状态。
+            # Hybrid 比纯 Grid 多拼接完整的 20 维人工状态。
             feature_size = (
                 cnn_feature_size + auxiliary_size
                 if state_mode == "hybrid"
@@ -142,18 +142,19 @@ class QNetwork(nn.Module):
         return value + advantage - advantage.mean(dim=1, keepdim=True)
 
 
-# SnakeEnv.get_state() 当前返回 19 维向量，用于 vector baseline。
+# SnakeEnv.get_state() 当前返回 20 维向量，用于 vector baseline。
 # SnakeEnv.get_grid_state() 返回纯 grid：
-# - grid shape = [5, height, width]
+# - grid shape = [6, height, width]
 # - channel 0: 边界格子
 # - channel 1: 蛇身，不含蛇头
 # - channel 2: 蛇头
 # - channel 3: 食物
 # - channel 4: 蛇身顺序，蛇头为 1.0，越靠近尾巴数值越小
-# SnakeEnv.get_hybrid_state() 返回 (grid, vector_state)，其中 vector_state shape = [19]。
+# - channel 5: 归一化饥饿进度常数平面
+# SnakeEnv.get_hybrid_state() 返回 (grid, vector_state)，其中 vector_state shape = [20]。
 
 
-#  19 维低维状态向量输入：
+#  20 维低维状态向量输入：
 
 # | 序号 | 维度 | 含义 |
 # |------|------|------|
@@ -176,3 +177,4 @@ class QNetwork(nn.Module):
 # | 17 | `body_distance_straight` | 直行方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 # | 18 | `body_distance_right` | 右转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 # | 19 | `body_distance_left` | 左转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
+# | 20 | `hunger_ratio` | 距离上次吃到食物的归一化步数。 |

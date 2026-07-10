@@ -35,6 +35,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--state-mode", choices=("vector", "grid", "hybrid"), default="vector"
     )
+    parser.add_argument(
+        "--no-potential-reward",
+        action="store_true",
+        help="Disable potential-based food progress shaping.",
+    )
+    parser.add_argument(
+        "--no-cost-rewards",
+        action="store_true",
+        help="Disable per-step and hunger costs and use the baseline timeout penalty.",
+    )
     # 完全确定性会让部分 CUDA 卷积/池化算子明显变慢；默认优先训练速度。
     parser.add_argument("--deterministic", action="store_true")
     # 这些参数只影响 Grid/Hybrid 的卷积主干，Vector baseline 会忽略它们。
@@ -221,6 +231,9 @@ def main() -> None:
         seed=train_config.seed,
         # 环境直接在 reset()/step() 中返回对应 observation，避免训练循环重复构造状态。
         state_mode=args.state_mode,
+        potential_reward=not args.no_potential_reward,
+        cost_rewards=not args.no_cost_rewards,
+        reward_gamma=train_config.gamma,
     )
     agent = DQNAgent(
         # 状态维度
@@ -301,6 +314,12 @@ def main() -> None:
                 "mean_score_100",
                 "episode_reward",
                 "mean_reward_100",
+                "food_reward",
+                "progress_reward",
+                "step_penalty",
+                "hunger_penalty",
+                "terminal_reward",
+                "termination_reason",
                 "episode_steps",
                 "epsilon",
                 "loss",
@@ -318,6 +337,13 @@ def main() -> None:
                 losses: list[float] = []
                 # 记录一个 episode 中所有 step 的 reward 总和，和 score 分开观察。
                 episode_reward = 0.0
+                reward_components = {
+                    "food": 0.0,
+                    "progress": 0.0,
+                    "step": 0.0,
+                    "hunger": 0.0,
+                    "terminal": 0.0,
+                }
 
                 # 一次episode训练
                 while not done:
@@ -327,6 +353,8 @@ def main() -> None:
                     next_state, reward, done, info = env.step(action)
                     # 累加本局每一步的环境奖励，形成单局累计 reward。
                     episode_reward += reward
+                    for component in reward_components:
+                        reward_components[component] += float(info[f"reward_{component}"])
                     # 加入经验回放池
                     agent.remember(state, action, reward, next_state, done)
                     # 智能体更新Q值，如果经验回放池没达到batch_size则返回None
@@ -392,6 +420,10 @@ def main() -> None:
                     writer.add_scalar("train/episode_reward", episode_reward, episode)
                     # 最近100局滑动平均累计环境奖励
                     writer.add_scalar("train/mean_reward_100", mean_reward, episode)
+                    for component, component_value in reward_components.items():
+                        writer.add_scalar(
+                            f"train/reward_{component}", component_value, episode
+                        )
                     # 本局存活步数
                     writer.add_scalar("train/episode_steps", episode_steps, episode)
                     # 当前探索率
@@ -411,6 +443,12 @@ def main() -> None:
                         f"{mean_score:.4f}",
                         f"{episode_reward:.4f}",
                         f"{mean_reward:.4f}",
+                        f"{reward_components['food']:.6f}",
+                        f"{reward_components['progress']:.6f}",
+                        f"{reward_components['step']:.6f}",
+                        f"{reward_components['hunger']:.6f}",
+                        f"{reward_components['terminal']:.6f}",
+                        str(info["termination_reason"]),
                         episode_steps,
                         f"{agent.epsilon:.6f}",
                         mean_loss,

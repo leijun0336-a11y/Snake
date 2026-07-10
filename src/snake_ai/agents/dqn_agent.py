@@ -25,7 +25,7 @@ class DQNAgent:
         # Adam 优化器学习率，控制神经网络参数更新步幅。
         learning_rate: float = 1e-3,
         # 折扣因子，越接近 1 越重视未来奖励。
-        gamma: float = 0.9,
+        gamma: float = 0.99,
         # 经验回放池容量，最多保存多少条 Transition。
         replay_buffer_size: int = 100_000,
         # 每次训练从经验池随机采样多少条经验。
@@ -43,7 +43,7 @@ class DQNAgent:
         # 状态输入模式：vector 使用人工低维状态，grid 使用多通道网格状态。
         state_mode: str = "vector",
         # Hybrid 模式下与 CNN 特征拼接的人工状态维度。
-        auxiliary_size: int = 19,
+        auxiliary_size: int = 20,
         # Grid/Hybrid CNN 主干通道数。
         cnn_channels: int = 32,
         # 1x1 卷积压缩后的通道数。
@@ -206,7 +206,7 @@ class DQNAgent:
         self, states: list[Any]
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if self.state_mode == "hybrid":
-            # Hybrid replay 中每条 state 都是 (grid, 19维人工状态)，分别组成两个 batch。
+            # Hybrid replay 中每条 state 都是 (grid, 20维人工状态)，分别组成两个 batch。
             grids = self._grid_batch_to_tensor([state[0] for state in states])
             auxiliary_array = np.asarray(
                 [state[1] for state in states], dtype=np.float32

@@ -67,7 +67,7 @@ uv run python -m snake_ai.train
 uv run python -m snake_ai.train --state-mode grid
 ```
 
-训练网格 CNN 与 19 维人工状态融合的 Hybrid state：
+训练网格 CNN 与 20 维人工状态融合的 Hybrid state：
 
 ```bash
 uv run python -m snake_ai.train --state-mode hybrid
@@ -80,7 +80,20 @@ uv run python -m snake_ai.train --state-mode hybrid
 - `runs/<run_name>/train_metrics.csv`
 - TensorBoard 训练日志，event 文件名带有 `.train` 后缀，包含逐局标量和 `train/report` 文本摘要
 
-训练日志会记录 `score`、`mean_score_100`、`episode_reward`、`mean_reward_100`、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。其中 `loss` 是 Huber loss。
+训练日志会记录 `score`、`mean_score_100`、总奖励、各奖励分量、终止原因、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。其中 `loss` 是 Huber loss。
+
+环境默认启用完整奖励设计：吃食物 `+10`、碰撞 `-10`、超时 `-12`、填满地图额外 `+20`、基于曼哈顿距离的势函数奖励、每步 `-0.005` 时间成本和二次增长的饥饿成本。两个奖励组可以独立关闭：
+
+```bash
+# 关闭势函数，只保留事件奖励与时间/饥饿成本
+uv run python -m snake_ai.train --no-potential-reward
+
+# 关闭时间/饥饿成本，只保留事件奖励与势函数
+uv run python -m snake_ai.train --no-cost-rewards
+
+# 同时关闭，恢复 +10/-10/0 的事件奖励基线
+uv run python -m snake_ai.train --no-potential-reward --no-cost-rewards
+```
 
 训练默认启用早停策略。默认最多训练 `--max-episodes=5000` 局，早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes=1000` 局；之后如果连续 `--patience=500` 局没有超过 `--min-delta=0.5` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止。
 
@@ -113,6 +126,8 @@ uv run python -m snake_ai.evaluate
 - `--checkpoint-dir`：checkpoint 输出目录。
 - `--runs-dir`：训练日志输出目录。
 - `--state-mode`：状态输入模式，可选 `vector`、`grid`、`hybrid`；默认 `vector`。
+- `--no-potential-reward`：关闭基于食物距离的势函数奖励。
+- `--no-cost-rewards`：关闭每步与饥饿成本；超时惩罚同时恢复为基线 `-10`。
 - `--cnn-channels`：Grid/Hybrid CNN 主干通道数，默认 `32`。
 - `--cnn-output-channels`：1x1 卷积压缩后的通道数，默认 `16`。
 - `--cnn-dilations`：空洞残差块的 dilation 序列，默认 `1 2 4`。
@@ -146,12 +161,15 @@ TensorBoard 参数：
 - `steps`：当前局已经走过的步数。
 - `snake_length`：当前蛇身长度。
 - `steps_since_food`：距离上次吃到食物已经走过的步数。
+- `reward_food`、`reward_progress`、`reward_step`、`reward_hunger`、`reward_terminal`：当前 step 的奖励分量。
+- `reward_total`：当前 step 的奖励总和。
+- `termination_reason`：`none`、`collision_wall`、`collision_body`、`starvation` 或 `board_completed`。
 
 评估脚本会基于这些即时指标继续计算 `score_per_step`、`max_snake_length`、平均分等汇总指标。
 
 ## 环境 state
 
-`SnakeEnv.get_state()` 返回 19 维低维状态向量，作为 Q 网络输入：
+`SnakeEnv.get_state()` 返回 20 维低维状态向量，作为 Q 网络输入：
 
 | 序号 | 维度 | 含义 |
 |------|------|------|
@@ -174,12 +192,13 @@ TensorBoard 参数：
 | 17 | `body_distance_straight` | 直行方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 | 18 | `body_distance_right` | 右转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 | 19 | `body_distance_left` | 左转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
+| 20 | `hunger_ratio` | `steps_since_food / (width * height)`，截断到 `[0, 1]`。 |
 
 `SnakeEnv.get_grid_state()` 返回纯多通道网格状态，作为 Grid CNN Q 网络输入：
 
 | 部分 | 形状 | 含义 |
 |------|------|------|
-| grid | `[5, height, width]` | `float32` NumPy 多通道符号网格。 |
+| grid | `[6, height, width]` | `float32` NumPy 多通道符号网格。 |
 
 grid 通道说明：
 
@@ -190,24 +209,25 @@ grid 通道说明：
 | 2 | 蛇头。 |
 | 3 | 食物。 |
 | 4 | 蛇身顺序，蛇头为 `1.0`，越靠近尾巴数值越小。 |
+| 5 | 饥饿比例常数平面，所有格子均为当前 `hunger_ratio`。 |
 
 `SnakeEnv.get_hybrid_state()` 返回 `(grid, vector_state)`：`grid` 是形状为
-`[5, height, width]` 的 `float32` NumPy 数组，`vector_state` 是 `get_state()`
-返回的完整 19 维人工状态。
-Hybrid Q 网络先提取并展平 CNN 特征，再与 19 维状态拼接。
+`[6, height, width]` 的 `float32` NumPy 数组，`vector_state` 是 `get_state()`
+返回的完整 20 维人工状态。
+Hybrid Q 网络先提取并展平 CNN 特征，再与 20 维状态拼接。
 
 三种模式用于对照实验：
 
 | 模式 | Q 网络输入 | 用途 |
 |------|------------|------|
-| `vector` | 19 维人工状态 | 保留原始 MLP baseline。 |
-| `grid` | 纯 5 通道网格 | 检验空洞 CNN 从网格端到端提取特征的能力，不额外拼接方向向量。 |
-| `hybrid` | 5 通道网格 + 19 维人工状态 | 结合全图布局与人工特征，提高有限算力下的学习效率。 |
+| `vector` | 20 维人工状态 | 低维 MLP baseline。 |
+| `grid` | 纯 6 通道网格 | 检验空洞 CNN 从网格端到端提取特征的能力，不额外拼接方向向量。 |
+| `hybrid` | 6 通道网格 + 20 维人工状态 | 结合全图布局与人工特征，提高有限算力下的学习效率。 |
 
 Grid 和 Hybrid 共用轻量空洞 CNN，默认结构为：
 
 ```text
-5 通道网格
+6 通道网格
   -> 3x3 Conv（32 通道）
   -> DilatedResidualBlock（dilation=1, 2, 4）
   -> 1x1 Conv（16 通道）
@@ -215,7 +235,7 @@ Grid 和 Hybrid 共用轻量空洞 CNN，默认结构为：
   -> Flatten（400 维）
 ```
 
-Grid 模式把 400 维 CNN 特征直接送入共享全连接层；Hybrid 模式先拼接 19 维人工状态，形成 419 维特征，再送入共享全连接层。两者最后都连接 Dueling 的 `V(s)` 和 `A(s,a)` 分支。
+Grid 模式把 400 维 CNN 特征直接送入共享全连接层；Hybrid 模式先拼接 20 维人工状态，形成 420 维特征，再送入共享全连接层。两者最后都连接 Dueling 的 `V(s)` 和 `A(s,a)` 分支。
 
 CNN 的主干通道数、压缩通道数、dilation 序列和池化尺寸已经参数化。训练保存的 checkpoint 会记录这些架构参数，评估时自动按 checkpoint 重建网络。不同 state mode 的 checkpoint 不能混用；旧的“grid + 4 维方向向量”checkpoint 与当前纯 Grid CNN 结构不兼容，会明确报错而不会静默加载。
 
@@ -238,6 +258,12 @@ Grid/Hybrid 的状态数据使用连续 NumPy 数组保存。动作选择时通�
 | 历史最高近 100 局平均得分 | `train/best_mean_score_100` | 无 | 历史最高 `mean_score_100`，用于保存 `best.pt`。 |
 | 单局累计奖励 | `train/episode_reward` | `episode_reward` | 当前 episode 内所有 step 的 reward 总和。 |
 | 近 100 局平均累计奖励 | `train/mean_reward_100` | `mean_reward_100` | 最近最多 100 个 episode 的 `episode_reward` 平均值。 |
+| 食物事件奖励 | `train/reward_food` | `food_reward` | 当前 episode 的食物事件奖励总和。 |
+| 势函数奖励 | `train/reward_progress` | `progress_reward` | 当前 episode 的食物距离势函数奖励总和。 |
+| 时间成本 | `train/reward_step` | `step_penalty` | 当前 episode 的逐步时间成本总和。 |
+| 饥饿成本 | `train/reward_hunger` | `hunger_penalty` | 当前 episode 的渐进饥饿成本总和。 |
+| 终止事件奖励 | `train/reward_terminal` | `terminal_reward` | 当前 episode 的碰撞、超时或完成地图奖励。 |
+| 终止原因 | 无 | `termination_reason` | 碰撞墙、碰撞身体、饥饿超时或完成地图。 |
 | 单局步数 | `train/episode_steps` | `episode_steps` | 当前 episode 的存活步数。 |
 | 探索率 | `train/epsilon` | `epsilon` | 当前 epsilon-greedy 探索率。 |
 | 单局平均损失 | `train/loss` | `loss` | 当前 episode 内所有学习 step 的平均 Huber loss。 |

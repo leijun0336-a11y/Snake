@@ -29,7 +29,7 @@ class TrainConfig:
     # 每次从经验池中采样多少条经验用于一次神经网络更新。
     batch_size: int = 64
     # 折扣因子，越接近 1 越重视未来奖励。
-    gamma: float = 0.9
+    gamma: float = 0.99
     # Adam 优化器的学习率，控制网络参数每次更新的步幅。
     learning_rate: float = 1e-3
     # 经验回放池最大容量，存放 state/action/reward/next_state/done。

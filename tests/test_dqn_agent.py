@@ -5,21 +5,21 @@ from snake_ai.agents.dqn_agent import DQNAgent
 
 
 def test_dueling_agent_outputs_action() -> None:
-    agent = DQNAgent(state_size=19, action_size=3, seed=1)
+    agent = DQNAgent(state_size=20, action_size=3, seed=1)
 
-    action = agent.act([0.0] * 19, training=False)
+    action = agent.act([0.0] * 20, training=False)
 
     assert action in (0, 1, 2)
 
 
 def test_grid_agent_outputs_action() -> None:
     agent = DQNAgent(
-        state_size=(5, 6, 6),
+        state_size=(6, 6, 6),
         action_size=3,
         state_mode="grid",
         seed=1,
     )
-    grid = np.zeros((5, 6, 6), dtype=np.float32)
+    grid = np.zeros((6, 6, 6), dtype=np.float32)
 
     action = agent.act(grid, training=False)
 
@@ -28,14 +28,14 @@ def test_grid_agent_outputs_action() -> None:
 
 def test_hybrid_agent_outputs_action() -> None:
     agent = DQNAgent(
-        state_size=(5, 6, 6),
+        state_size=(6, 6, 6),
         action_size=3,
         state_mode="hybrid",
-        auxiliary_size=19,
+        auxiliary_size=20,
         seed=1,
     )
-    grid = np.zeros((5, 6, 6), dtype=np.float32)
-    vector_state = [0.0] * 19
+    grid = np.zeros((6, 6, 6), dtype=np.float32)
+    vector_state = [0.0] * 20
 
     action = agent.act((grid, vector_state), training=False)
 
@@ -45,15 +45,15 @@ def test_hybrid_agent_outputs_action() -> None:
 @pytest.mark.parametrize("state_mode", ["grid", "hybrid"])
 def test_cnn_agent_learns_from_numpy_replay_batch(state_mode: str) -> None:
     agent = DQNAgent(
-        state_size=(5, 6, 6),
+        state_size=(6, 6, 6),
         action_size=3,
         state_mode=state_mode,
-        auxiliary_size=19,
+        auxiliary_size=20,
         batch_size=2,
         seed=1,
     )
-    grid = np.zeros((5, 6, 6), dtype=np.float32)
-    vector_state = [0.0] * 19
+    grid = np.zeros((6, 6, 6), dtype=np.float32)
+    vector_state = [0.0] * 20
     state = (grid, vector_state) if state_mode == "hybrid" else grid
 
     # 两条经验恰好填满一个 batch，覆盖 np.stack -> from_numpy -> learn() 完整路径。
@@ -80,7 +80,7 @@ def test_load_rejects_incompatible_state_size(tmp_path) -> None:
     old_agent = DQNAgent(state_size=11, action_size=3, seed=1)
     old_agent.save(checkpoint_path)
 
-    agent = DQNAgent(state_size=19, action_size=3, seed=1)
+    agent = DQNAgent(state_size=20, action_size=3, seed=1)
 
     with pytest.raises(ValueError, match="state_size"):
         agent.load(checkpoint_path)
@@ -88,11 +88,11 @@ def test_load_rejects_incompatible_state_size(tmp_path) -> None:
 
 def test_load_rejects_incompatible_state_mode(tmp_path) -> None:
     checkpoint_path = tmp_path / "vector.pt"
-    vector_agent = DQNAgent(state_size=19, action_size=3, seed=1)
+    vector_agent = DQNAgent(state_size=20, action_size=3, seed=1)
     vector_agent.save(checkpoint_path)
 
     grid_agent = DQNAgent(
-        state_size=(5, 6, 6),
+        state_size=(6, 6, 6),
         action_size=3,
         state_mode="grid",
         seed=1,
@@ -105,10 +105,10 @@ def test_load_rejects_incompatible_state_mode(tmp_path) -> None:
 def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     checkpoint_path = tmp_path / "custom_cnn.pt"
     trained_agent = DQNAgent(
-        state_size=(5, 8, 8),
+        state_size=(6, 8, 8),
         action_size=3,
         state_mode="hybrid",
-        auxiliary_size=19,
+        auxiliary_size=20,
         cnn_channels=24,
         cnn_output_channels=12,
         cnn_dilations=(1, 3),
@@ -118,10 +118,10 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     trained_agent.save(checkpoint_path)
 
     loaded_agent = DQNAgent(
-        state_size=(5, 8, 8),
+        state_size=(6, 8, 8),
         action_size=3,
         state_mode="hybrid",
-        auxiliary_size=19,
+        auxiliary_size=20,
         seed=1,
     )
     loaded_agent.load(checkpoint_path)

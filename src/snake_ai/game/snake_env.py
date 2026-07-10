@@ -12,6 +12,7 @@ import numpy as np
 GridState = np.ndarray
 HybridState = tuple[GridState, list[float]]
 Observation = list[float] | GridState | HybridState
+InfoValue = int | float | str
 
 @dataclass(frozen=True)  
 class Point:
@@ -32,10 +33,10 @@ class SnakeEnv:
 
     # 动作维度
     action_size = 3
-    # 状态维度：11 个原始方向/危险特征 + 8 个距离特征。
-    state_size = 19
-    # 网格状态的通道数：边界、蛇身、蛇头、食物、蛇身顺序。
-    grid_channels = 5
+    # 状态维度：11 个原始方向/危险特征 + 8 个距离特征 + 1 个饥饿进度。
+    state_size = 20
+    # 网格状态的通道数：边界、蛇身、蛇头、食物、蛇身顺序、饥饿进度。
+    grid_channels = 6
 
     def __init__(
         self,
@@ -48,11 +49,27 @@ class SnakeEnv:
         fps: int = 30,
         seed: int | None = None,
         state_mode: str = "vector",
+        potential_reward: bool = True,
+        cost_rewards: bool = True,
+        reward_gamma: float = 0.99,
+        progress_beta: float = 2.0,
+        food_reward: float = 10.0,
+        collision_penalty: float = -10.0,
+        starvation_penalty: float = -12.0,
+        win_reward: float = 20.0,
+        step_penalty: float = -0.005,
+        hunger_penalty_scale: float = 0.02,
     ) -> None:
         if width < 5 or height < 5:
             raise ValueError("width and height must both be at least 5")
         if state_mode not in ("vector", "grid", "hybrid"):
             raise ValueError("state_mode must be 'vector', 'grid', or 'hybrid'")
+        if not 0.0 <= reward_gamma <= 1.0:
+            raise ValueError("reward_gamma must be between 0 and 1")
+        if progress_beta < 0.0:
+            raise ValueError("progress_beta must be non-negative")
+        if step_penalty > 0.0 or hunger_penalty_scale < 0.0:
+            raise ValueError("reward costs must use a non-positive step penalty and scale >= 0")
 
         self.width = width
         self.height = height
@@ -61,6 +78,16 @@ class SnakeEnv:
         self.fps = fps
         # reset()/step() 根据该模式直接返回所需 observation，避免训练循环重复计算状态。
         self.state_mode = state_mode
+        self.potential_reward = potential_reward
+        self.cost_rewards = cost_rewards
+        self.reward_gamma = reward_gamma
+        self.progress_beta = progress_beta
+        self.food_reward = food_reward
+        self.collision_penalty = collision_penalty
+        self.starvation_penalty = starvation_penalty
+        self.win_reward = win_reward
+        self.step_penalty = step_penalty
+        self.hunger_penalty_scale = hunger_penalty_scale
         self.random = random.Random(seed)
         self.renderer = None
 
@@ -81,6 +108,8 @@ class SnakeEnv:
         self.steps_since_food = 0
         # 当前 episode 已经进行了多少个环境 step，也就是这一局蛇总共走了多少步
         self.frame_iteration = 0
+        self.last_reward_components = self._empty_reward_components()
+        self.termination_reason = "none"
         self.reset()
 
     def reset(self) -> Observation:
@@ -96,38 +125,72 @@ class SnakeEnv:
         self.score = 0
         self.steps_since_food = 0
         self.frame_iteration = 0
+        self.last_reward_components = self._empty_reward_components()
+        self.termination_reason = "none"
         self._place_food()
         return self._get_observation()
 
     # 让环境根据一个动作向前推进一步: 给蛇一个动作 -> 蛇走一格 -> 环境返回这一步的结果
-    def step(self, action: int) -> tuple[Observation, float, bool, dict[str, int]]:
+    def step(self, action: int) -> tuple[Observation, float, bool, dict[str, InfoValue]]:
         if action not in (0, 1, 2):
             raise ValueError("action must be 0 (straight), 1 (right), or 2 (left)")
 
-        # 蛇的总步数+1
+        # frame_iteration 记录动作尝试次数，包括最终发生碰撞的动作。
         self.frame_iteration += 1
-        # 距离上次吃到食物的步数+1
-        self.steps_since_food += 1
+        old_head = self.snake[0]
+        old_food = self.food
         new_head = self._move(action)
+        self.last_reward_components = self._empty_reward_components()
+        self.termination_reason = "none"
 
-        reward = 0.0
-        done = False
+        # 如果这一步不会吃到食物，当前尾巴会移动走，因此允许蛇头走到尾巴原来的格子。
+        if self._is_collision_after_move(new_head):
+            self.last_reward_components["terminal"] = self.collision_penalty
+            self.termination_reason = self._collision_reason(new_head)
+            reward = self._total_reward()
+            return self._get_observation(), reward, True, self._get_info()
 
-        # 惩罚条件：如果这一步不会吃到食物，当前尾巴会移动走，因此允许蛇头走到尾巴原来的格子。
-        if self._is_collision_after_move(new_head) or self._is_too_long_without_food():
-            done = True
-            reward = -10.0
-            return self._get_observation(), reward, done, self._get_info()
-
-        # 奖励条件
+        # 合法移动先更新蛇身，再根据同一颗 old_food 计算进度奖励。
         self.snake.insert(0, new_head)
-        if new_head == self.food:
+        ate_food = new_head == old_food
+        if ate_food:
             self.score += 1
             self.steps_since_food = 0
-            reward = 10.0
-            self._place_food()
+            self.last_reward_components["food"] = self.food_reward
         else:
             self.snake.pop()
+            self.steps_since_food += 1
+
+        if self.potential_reward:
+            old_phi = self._food_potential(old_head, old_food)
+            new_phi = self._food_potential(new_head, old_food)
+            self.last_reward_components["progress"] = self.progress_beta * (
+                self.reward_gamma * new_phi - old_phi
+            )
+
+        if self.cost_rewards:
+            self.last_reward_components["step"] = self.step_penalty
+            if not ate_food:
+                self.last_reward_components["hunger"] = (
+                    -self.hunger_penalty_scale * self.hunger_ratio**2
+                )
+
+        done = False
+        if ate_food and len(self.snake) == self.width * self.height:
+            self.last_reward_components["terminal"] = self.win_reward
+            self.termination_reason = "board_completed"
+            done = True
+        elif ate_food:
+            self._place_food()
+        elif self._is_too_long_without_food():
+            # 关闭成本奖励后，超时也恢复为与碰撞相同的基线终止惩罚。
+            self.last_reward_components["terminal"] = (
+                self.starvation_penalty if self.cost_rewards else self.collision_penalty
+            )
+            self.termination_reason = "starvation"
+            done = True
+
+        reward = self._total_reward()
 
         # 渲染
         if self.renderer is not None:
@@ -192,6 +255,8 @@ class SnakeEnv:
             self._body_distance_norm(right_direction),
             # 19. 左转方向最近身体距离；没有身体时为 1.0。
             self._body_distance_norm(left_direction),
+            # 20. 距离上次吃到食物的归一化步数，使饥饿终止条件对智能体可见。
+            self.hunger_ratio,
         ]
 
     @property
@@ -199,7 +264,7 @@ class SnakeEnv:
         return self.grid_channels, self.height, self.width
 
     def get_grid_state(self) -> GridState:
-        # 通道顺序固定为：边界、蛇身、蛇头、食物、蛇身顺序。
+        # 通道顺序固定为：边界、蛇身、蛇头、食物、蛇身顺序、饥饿进度。
         # float32 连续数组可被 torch.from_numpy 直接读取，避免递归转换 Python 嵌套列表。
         grid = np.zeros(
             (self.grid_channels, self.height, self.width),
@@ -225,10 +290,12 @@ class SnakeEnv:
                 grid[1, point.y, point.x] = 1.0
 
         grid[3, self.food.y, self.food.x] = 1.0
+        # 常数平面把全局饥饿比例提供给纯 CNN，同时保持 observation 为单个张量。
+        grid[5, :, :] = self.hunger_ratio
         return grid
 
     def get_hybrid_state(self) -> HybridState:
-        # Hybrid 模式同时提供完整网格和 19 维人工特征，在 Q 网络展平后拼接。
+        # Hybrid 模式同时提供完整网格和 20 维人工特征，在 Q 网络展平后拼接。
         return self.get_grid_state(), self.get_state()
 
     def _get_observation(self) -> Observation:
@@ -257,13 +324,51 @@ class SnakeEnv:
         if self.renderer is not None:
             self.renderer.close()
 
-    def _get_info(self) -> dict[str, int]:
+    @property
+    def starvation_limit(self) -> int:
+        return self.width * self.height
+
+    @property
+    def hunger_ratio(self) -> float:
+        return min(self.steps_since_food / self.starvation_limit, 1.0)
+
+    def _get_info(self) -> dict[str, InfoValue]:
         return {
             "score": self.score,
             "steps": self.frame_iteration,
             "snake_length": len(self.snake),
             "steps_since_food": self.steps_since_food,
+            "reward_food": self.last_reward_components["food"],
+            "reward_progress": self.last_reward_components["progress"],
+            "reward_step": self.last_reward_components["step"],
+            "reward_hunger": self.last_reward_components["hunger"],
+            "reward_terminal": self.last_reward_components["terminal"],
+            "reward_total": self._total_reward(),
+            "termination_reason": self.termination_reason,
         }
+
+    @staticmethod
+    def _empty_reward_components() -> dict[str, float]:
+        return {
+            "food": 0.0,
+            "progress": 0.0,
+            "step": 0.0,
+            "hunger": 0.0,
+            "terminal": 0.0,
+        }
+
+    def _total_reward(self) -> float:
+        return float(sum(self.last_reward_components.values()))
+
+    def _food_potential(self, head: Point, food: Point) -> float:
+        max_distance = max((self.width - 1) + (self.height - 1), 1)
+        distance = abs(food.x - head.x) + abs(food.y - head.y)
+        return 1.0 - distance / max_distance
+
+    def _collision_reason(self, point: Point) -> str:
+        if point.x < 0 or point.x >= self.width or point.y < 0 or point.y >= self.height:
+            return "collision_wall"
+        return "collision_body"
 
     def _place_food(self) -> None:
         available = [
@@ -360,4 +465,4 @@ class SnakeEnv:
 
     # 用于判断蛇是不是太久没有吃到食物了
     def _is_too_long_without_food(self) -> bool:
-        return self.steps_since_food > self.width * self.height
+        return self.steps_since_food > self.starvation_limit
