@@ -53,6 +53,51 @@ def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
     }
 
 
+def print_stop_overview(args: argparse.Namespace, max_episodes: int) -> None:
+    early_stop_enabled = not args.no_early_stop
+    patience_earliest_episode = max(args.min_episodes, args.patience + 1)
+    target_earliest_episode = 100 if args.target_mean_score is not None else None
+    earliest_candidates = [patience_earliest_episode]
+    if target_earliest_episode is not None:
+        earliest_candidates.append(target_earliest_episode)
+    reachable_earliest_candidates = [
+        episode for episode in earliest_candidates if episode <= max_episodes
+    ]
+    earliest_stop_text = (
+        str(min(reachable_earliest_candidates))
+        if reachable_earliest_candidates
+        else "not reachable within max episodes"
+    )
+
+    print("")
+    print("========== training stop overview ==========")
+    print(f"max episodes without early stop : {max_episodes}")
+    print(f"early stop enabled              : {early_stop_enabled}")
+    if not early_stop_enabled:
+        print("earliest early stop episode     : disabled")
+        print("actual stop condition           : run until max episodes")
+    else:
+        print(f"earliest early stop episode     : {earliest_stop_text}")
+        if target_earliest_episode is None:
+            print("target mean score stop          : disabled")
+        else:
+            print(
+                "target mean score stop          : "
+                f"episode >= {target_earliest_episode}, "
+                f"mean_score_100 >= {args.target_mean_score:.2f}"
+            )
+        print(
+            "patience stop                   : "
+            f"episode >= {args.min_episodes}, "
+            f"no effective improvement for {args.patience} episodes"
+        )
+        print(f"earliest patience stop episode  : {patience_earliest_episode}")
+        if patience_earliest_episode > max_episodes:
+            print("patience stop within max episode: impossible with current settings")
+    print("============================================")
+    print("")
+
+
 # 生成训练报告的文本内容，供 TensorBoard 显示
 def format_train_report(
     run_name: str,
@@ -122,6 +167,7 @@ def main() -> None:
 
     print(f"run_dir={run_dir}")
     print(f"checkpoint_dir={checkpoint_dir}")
+    print_stop_overview(args, train_config.episodes)
 
     # 在指定的文件夹（这里是刚才创建的 run_dir）里新建训练日志文件；.train 后缀方便和评估日志区分。
     writer = SummaryWriter(run_dir, filename_suffix=".train") if SummaryWriter is not None else None

@@ -25,7 +25,7 @@ class EnvConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     # 训练总局数，每一局从 reset 开始，到撞墙、撞身体或超时结束。
-    episodes: int = 1000
+    episodes: int = 3000
     # 每次从经验池中采样多少条经验用于一次神经网络更新。
     batch_size: int = 64
     # 折扣因子，越接近 1 越重视未来奖励。
@@ -40,7 +40,7 @@ class TrainConfig:
     epsilon_end: float = 0.01
     # 每局结束后的探索率衰减系数。
     epsilon_decay: float = 0.995
-    # 每隔多少次学习步骤，把 policy network 的参数同步到 target network。
+    # 每隔多少次学习(buffer满后蛇每走一步就learn()一次)步骤，把 policy network 的参数同步到 target network。
     target_update_interval: int = 1000
     # Q 网络隐藏层神经元数量。
     hidden_size: int = 128
