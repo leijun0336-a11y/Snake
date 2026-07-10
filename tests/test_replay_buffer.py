@@ -11,6 +11,8 @@ def test_replay_buffer_respects_capacity() -> None:
     buffer.push([2], 2, 2.0, [3], True)
 
     assert len(buffer) == 2
+    # 环形列表写满后应覆盖最旧的 state=[0]，保留最近两条经验。
+    assert {item.state[0] for item in buffer.sample(2)} == {1, 2}
 
 
 def test_sample_returns_requested_batch_size() -> None:

@@ -179,7 +179,7 @@ TensorBoard 参数：
 
 | 部分 | 形状 | 含义 |
 |------|------|------|
-| grid | `[5, height, width]` | 多通道符号网格。 |
+| grid | `[5, height, width]` | `float32` NumPy 多通道符号网格。 |
 
 grid 通道说明：
 
@@ -191,8 +191,9 @@ grid 通道说明：
 | 3 | 食物。 |
 | 4 | 蛇身顺序，蛇头为 `1.0`，越靠近尾巴数值越小。 |
 
-`SnakeEnv.get_hybrid_state()` 返回 `(grid, vector_state)`：`grid` 形状仍为
-`[5, height, width]`，`vector_state` 是 `get_state()` 返回的完整 19 维人工状态。
+`SnakeEnv.get_hybrid_state()` 返回 `(grid, vector_state)`：`grid` 是形状为
+`[5, height, width]` 的 `float32` NumPy 数组，`vector_state` 是 `get_state()`
+返回的完整 19 维人工状态。
 Hybrid Q 网络先提取并展平 CNN 特征，再与 19 维状态拼接。
 
 三种模式用于对照实验：
@@ -217,6 +218,13 @@ Grid 和 Hybrid 共用轻量空洞 CNN，默认结构为：
 Grid 模式把 400 维 CNN 特征直接送入共享全连接层；Hybrid 模式先拼接 19 维人工状态，形成 419 维特征，再送入共享全连接层。两者最后都连接 Dueling 的 `V(s)` 和 `A(s,a)` 分支。
 
 CNN 的主干通道数、压缩通道数、dilation 序列和池化尺寸已经参数化。训练保存的 checkpoint 会记录这些架构参数，评估时自动按 checkpoint 重建网络。不同 state mode 的 checkpoint 不能混用；旧的“grid + 4 维方向向量”checkpoint 与当前纯 Grid CNN 结构不兼容，会明确报错而不会静默加载。
+
+Grid/Hybrid 的状态数据使用连续 NumPy 数组保存。动作选择时通过
+`torch.from_numpy()` 读取单个状态；经验回放采样后先用一次 `np.stack()`
+组成连续 batch，再整体转换并传入计算设备，避免递归遍历 Python 嵌套列表。
+环境的 `reset()` 和 `step()` 会直接返回所选 `state_mode` 对应的 observation，
+不会先生成无用的 vector state。ReplayBuffer 使用固定容量环形列表，通过随机
+索引直接采样，避免每次学习时复制整个经验池。
 
 ## 指标说明
 

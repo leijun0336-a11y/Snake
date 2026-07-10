@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from snake_ai.agents.dqn_agent import DQNAgent
@@ -18,7 +19,7 @@ def test_grid_agent_outputs_action() -> None:
         state_mode="grid",
         seed=1,
     )
-    grid = [[[0.0 for _ in range(6)] for _ in range(6)] for _ in range(5)]
+    grid = np.zeros((5, 6, 6), dtype=np.float32)
 
     action = agent.act(grid, training=False)
 
@@ -33,12 +34,33 @@ def test_hybrid_agent_outputs_action() -> None:
         auxiliary_size=19,
         seed=1,
     )
-    grid = [[[0.0 for _ in range(6)] for _ in range(6)] for _ in range(5)]
+    grid = np.zeros((5, 6, 6), dtype=np.float32)
     vector_state = [0.0] * 19
 
     action = agent.act((grid, vector_state), training=False)
 
     assert action in (0, 1, 2)
+
+
+@pytest.mark.parametrize("state_mode", ["grid", "hybrid"])
+def test_cnn_agent_learns_from_numpy_replay_batch(state_mode: str) -> None:
+    agent = DQNAgent(
+        state_size=(5, 6, 6),
+        action_size=3,
+        state_mode=state_mode,
+        auxiliary_size=19,
+        batch_size=2,
+        seed=1,
+    )
+    grid = np.zeros((5, 6, 6), dtype=np.float32)
+    vector_state = [0.0] * 19
+    state = (grid, vector_state) if state_mode == "hybrid" else grid
+
+    # 两条经验恰好填满一个 batch，覆盖 np.stack -> from_numpy -> learn() 完整路径。
+    agent.remember(state, 0, 0.0, state, False)
+    agent.remember(state, 1, 1.0, state, True)
+
+    assert isinstance(agent.learn(), float)
 
 
 def test_load_legacy_non_dueling_checkpoint(tmp_path) -> None:

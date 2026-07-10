@@ -16,3 +16,16 @@
 
 解决：修改文件夹结构，按照时间编号实验文件夹，不同的实验下有不同的权重和评估指标的记录。
 
+# 问题
+训练grid版本奇慢无比
+
+解决：
+
+1. 把 Grid 状态从 Python 三层嵌套列表改成连续的 float32 NumPy 数组。
+
+2. 把 ReplayBuffer 从“每次复制整个 deque 后采样”改成环形列表随机索引采样。原来：
+random.sample(list(self.memory), 64)
+经验池达到 100,000 条后，每一步都要先复制 100,000 个引用。
+现在：
+indices = random.sample(range(self.size), 64)
+

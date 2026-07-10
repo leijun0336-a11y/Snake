@@ -5,6 +5,7 @@ import random
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch import nn, optim
 
@@ -206,12 +207,33 @@ class DQNAgent:
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if self.state_mode == "hybrid":
             # Hybrid replay 中每条 state 都是 (grid, 19维人工状态)，分别组成两个 batch。
-            grids = torch.tensor([state[0] for state in states], dtype=torch.float32, device=self.device)
-            auxiliary_states = torch.tensor(
-                [state[1] for state in states], dtype=torch.float32, device=self.device
+            grids = self._grid_batch_to_tensor([state[0] for state in states])
+            auxiliary_array = np.asarray(
+                [state[1] for state in states], dtype=np.float32
             )
+            auxiliary_states = self._numpy_to_tensor(auxiliary_array)
             return grids, auxiliary_states
-        return torch.tensor(states, dtype=torch.float32, device=self.device)
+        if self.state_mode == "grid":
+            return self._grid_batch_to_tensor(states)
+
+        # Vector 状态很小，先一次性组成连续 NumPy 数组，再交给 PyTorch。
+        vector_array = np.asarray(states, dtype=np.float32)
+        return self._numpy_to_tensor(vector_array)
+
+    def _grid_batch_to_tensor(self, grids: list[Any]) -> torch.Tensor:
+        if len(grids) == 1:
+            # act() 的单状态只增加 batch 维度，不复制底层 NumPy 网格。
+            grid_array = np.expand_dims(grids[0], axis=0)
+        else:
+            # learn() 只进行一次连续内存复制，替代 torch.tensor 对嵌套列表的递归遍历。
+            grid_array = np.stack(grids, axis=0)
+        grid_array = np.asarray(grid_array, dtype=np.float32)
+        return self._numpy_to_tensor(grid_array)
+
+    def _numpy_to_tensor(self, array: np.ndarray) -> torch.Tensor:
+        # CPU 上 from_numpy 与数组共享内存；CUDA 模式只在最后一步统一复制到显存。
+        contiguous_array = np.ascontiguousarray(array)
+        return torch.from_numpy(contiguous_array).to(self.device)
 
     # 把当前训练状态存到文件里
     def save(self, path: str | Path) -> None:

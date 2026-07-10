@@ -1,3 +1,5 @@
+import numpy as np
+
 from snake_ai.game import Direction, Point, SnakeEnv
 
 
@@ -36,6 +38,9 @@ def test_grid_state_contains_map_channels() -> None:
 
     grid = env.get_grid_state()
 
+    assert isinstance(grid, np.ndarray)
+    assert grid.dtype == np.float32
+    assert grid.shape == env.grid_state_shape
     assert len(grid) == env.grid_channels
     assert len(grid[0]) == env.height
     assert len(grid[0][0]) == env.width
@@ -55,6 +60,27 @@ def test_hybrid_state_contains_grid_and_vector_state() -> None:
     assert len(grid) == env.grid_channels
     assert len(vector_state) == env.state_size
     assert vector_state == env.get_state()
+
+
+def test_reset_and_step_return_selected_grid_observation() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1, state_mode="grid")
+
+    state = env.reset()
+    next_state, _, _, _ = env.step(0)
+
+    assert isinstance(state, np.ndarray)
+    assert isinstance(next_state, np.ndarray)
+    assert state.shape == env.grid_state_shape
+    assert next_state.shape == env.grid_state_shape
+
+
+def test_reset_returns_selected_hybrid_observation() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1, state_mode="hybrid")
+
+    grid, vector_state = env.reset()
+
+    assert isinstance(grid, np.ndarray)
+    assert len(vector_state) == env.state_size
 
 
 def test_step_moves_snake_and_returns_gym_like_tuple() -> None:

@@ -2,11 +2,8 @@
 from __future__ import annotations
 
 import random
-# 两端都能快速弹出和插入数据的列表。
-from collections import deque
 from dataclasses import dataclass
-# 用于给双端队列声明元素类型。
-from typing import Any, Deque
+from typing import Any
 
 
 @dataclass(frozen=True)  # frozen=True，创建后字段不能被重新赋值。
@@ -30,8 +27,11 @@ class ReplayBuffer:
         # capacity 表示经验池最多保存多少条经验，必须是正数。
         if capacity <= 0:
             raise ValueError("capacity must be positive")
-        # 用固定最大长度的队列保存经验；满了以后，再加入新经验会自动丢弃最旧经验。
-        self.memory: Deque[Transition] = deque(maxlen=capacity)
+        self.capacity = capacity
+        # 固定容量环形列表可按随机索引直接采样，避免每次 learn() 都复制整个 deque。
+        self.memory: list[Transition | None] = [None] * capacity
+        self.position = 0
+        self.size = 0
         # 独立的随机数生成器，用于随机采样经验；传入 seed 后采样过程更容易复现。
         self.random = random.Random(seed)
 
@@ -43,16 +43,25 @@ class ReplayBuffer:
         next_state: Any,
         done: bool,
     ) -> None:
-        # 把一次交互产生的 state/action/reward/next_state/done 打包成 Transition 存入经验池。
-        self.memory.append(Transition(state, action, reward, next_state, done))
+        # 写满后从 position 指向的位置覆盖最旧经验，不复制 NumPy state 本身。
+        self.memory[self.position] = Transition(state, action, reward, next_state, done)
+        self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int) -> list[Transition]:
         # 采样数量不能超过当前经验池里已有的经验数量。
-        if batch_size > len(self.memory):
+        if batch_size > self.size:
             raise ValueError("batch_size cannot be larger than buffer length")
-        # 从经验池中随机抽取 batch_size 条经验，用于一次 DQN 训练更新。返回一个列表。
-        return self.random.sample(list(self.memory), batch_size)
+        # 只生成 batch_size 个随机索引，采样成本不再随整个经验池容量线性增长。
+        indices = self.random.sample(range(self.size), batch_size)
+        batch: list[Transition] = []
+        for index in indices:
+            transition = self.memory[index]
+            if transition is None:
+                raise RuntimeError("Replay buffer contains an uninitialized slot")
+            batch.append(transition)
+        return batch
 
     def __len__(self) -> int:
-        # 让 len(buffer) 可以直接返回当前经验池中的经验条数。
-        return len(self.memory)
+        # 让 len(buffer) 返回已写入经验数，而不是预分配列表容量。
+        return self.size

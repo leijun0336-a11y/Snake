@@ -6,6 +6,13 @@ from dataclasses import dataclass
 # Enumeration（枚举） 的缩写，Python 用来定义一组固定常量的工具
 from enum import Enum  
 
+import numpy as np
+
+
+GridState = np.ndarray
+HybridState = tuple[GridState, list[float]]
+Observation = list[float] | GridState | HybridState
+
 @dataclass(frozen=True)  
 class Point:
     x: int
@@ -40,15 +47,20 @@ class SnakeEnv:
         cell_size: int = 24,
         fps: int = 30,
         seed: int | None = None,
+        state_mode: str = "vector",
     ) -> None:
         if width < 5 or height < 5:
             raise ValueError("width and height must both be at least 5")
+        if state_mode not in ("vector", "grid", "hybrid"):
+            raise ValueError("state_mode must be 'vector', 'grid', or 'hybrid'")
 
         self.width = width
         self.height = height
         self.render_mode = render_mode
         self.cell_size = cell_size
         self.fps = fps
+        # reset()/step() 根据该模式直接返回所需 observation，避免训练循环重复计算状态。
+        self.state_mode = state_mode
         self.random = random.Random(seed)
         self.renderer = None
 
@@ -71,7 +83,7 @@ class SnakeEnv:
         self.frame_iteration = 0
         self.reset()
 
-    def reset(self) -> list[float]:
+    def reset(self) -> Observation:
         center = Point(self.width // 2, self.height // 2)
         self.direction = Direction.RIGHT
         
@@ -85,10 +97,10 @@ class SnakeEnv:
         self.steps_since_food = 0
         self.frame_iteration = 0
         self._place_food()
-        return self.get_state()
+        return self._get_observation()
 
     # 让环境根据一个动作向前推进一步: 给蛇一个动作 -> 蛇走一格 -> 环境返回这一步的结果
-    def step(self, action: int) -> tuple[list[float], float, bool, dict[str, int]]:
+    def step(self, action: int) -> tuple[Observation, float, bool, dict[str, int]]:
         if action not in (0, 1, 2):
             raise ValueError("action must be 0 (straight), 1 (right), or 2 (left)")
 
@@ -105,7 +117,7 @@ class SnakeEnv:
         if self._is_collision_after_move(new_head) or self._is_too_long_without_food():
             done = True
             reward = -10.0
-            return self.get_state(), reward, done, self._get_info()
+            return self._get_observation(), reward, done, self._get_info()
 
         # 奖励条件
         self.snake.insert(0, new_head)
@@ -121,8 +133,8 @@ class SnakeEnv:
         if self.renderer is not None:
             self.renderer.render(self.snake, self.food, self.score)
 
-        # 返回环境反馈的状态向量，奖励，是否结束，其他额外信息info.
-        return self.get_state(), reward, done, self._get_info()
+        # 返回当前模式对应的 observation，避免 Grid/Hybrid 模式额外计算无用 vector state。
+        return self._get_observation(), reward, done, self._get_info()
 
     # 把当前游戏局面转换成DQN能输入的状态向量。
     def get_state(self) -> list[float]:
@@ -186,37 +198,46 @@ class SnakeEnv:
     def grid_state_shape(self) -> tuple[int, int, int]:
         return self.grid_channels, self.height, self.width
 
-    def get_grid_state(self) -> list[list[list[float]]]:
+    def get_grid_state(self) -> GridState:
         # 通道顺序固定为：边界、蛇身、蛇头、食物、蛇身顺序。
-        grid = [
-            [[0.0 for _ in range(self.width)] for _ in range(self.height)]
-            for _ in range(self.grid_channels)
-        ]
+        # float32 连续数组可被 torch.from_numpy 直接读取，避免递归转换 Python 嵌套列表。
+        grid = np.zeros(
+            (self.grid_channels, self.height, self.width),
+            dtype=np.float32,
+        )
 
         # 边界格子不是墙内障碍，但能提示 CNN 接近地图边缘时风险更高。
         for x in range(self.width):
-            grid[0][0][x] = 1.0
-            grid[0][self.height - 1][x] = 1.0
+            grid[0, 0, x] = 1.0
+            grid[0, self.height - 1, x] = 1.0
         for y in range(self.height):
-            grid[0][y][0] = 1.0
-            grid[0][y][self.width - 1] = 1.0
+            grid[0, y, 0] = 1.0
+            grid[0, y, self.width - 1] = 1.0
 
         snake_length = max(len(self.snake), 1)
         for index, point in enumerate(self.snake):
             # 蛇头为 1.0，越接近尾巴数值越小，帮助 CNN 感知身体拓扑顺序。
             order_value = (snake_length - index) / snake_length
-            grid[4][point.y][point.x] = order_value
+            grid[4, point.y, point.x] = order_value
             if index == 0:
-                grid[2][point.y][point.x] = 1.0
+                grid[2, point.y, point.x] = 1.0
             else:
-                grid[1][point.y][point.x] = 1.0
+                grid[1, point.y, point.x] = 1.0
 
-        grid[3][self.food.y][self.food.x] = 1.0
+        grid[3, self.food.y, self.food.x] = 1.0
         return grid
 
-    def get_hybrid_state(self) -> tuple[list[list[list[float]]], list[float]]:
+    def get_hybrid_state(self) -> HybridState:
         # Hybrid 模式同时提供完整网格和 19 维人工特征，在 Q 网络展平后拼接。
         return self.get_grid_state(), self.get_state()
+
+    def _get_observation(self) -> Observation:
+        # 统一 observation 出口，使 reset() 和 step() 与训练选择的模式保持一致。
+        if self.state_mode == "grid":
+            return self.get_grid_state()
+        if self.state_mode == "hybrid":
+            return self.get_hybrid_state()
+        return self.get_state()
 
     # 判断是否撞墙或者吃到蛇自己。这里是严格判断，会把当前尾巴也算作身体。
     def is_collision(self, point: Point) -> bool:

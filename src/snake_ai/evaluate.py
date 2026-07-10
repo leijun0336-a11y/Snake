@@ -120,15 +120,6 @@ def get_checkpoint_state_mode(checkpoint_path: Path) -> str:
     return str(checkpoint.get("state_mode", "vector"))
 
 
-def get_env_state(env: SnakeEnv, state_mode: str):
-    # 与训练入口保持完全相同的状态分流规则。
-    if state_mode == "hybrid":
-        return env.get_hybrid_state()
-    if state_mode == "grid":
-        return env.get_grid_state()
-    return env.get_state()
-
-
 def main() -> None:
     args = parse_args()
     train_config = TrainConfig()
@@ -170,6 +161,8 @@ def main() -> None:
         cell_size=env_config.cell_size,
         fps=env_config.fps,
         seed=train_config.seed,
+        # 与训练保持一致，由环境直接返回 checkpoint 所需模式的 observation。
+        state_mode=state_mode,
     )
     agent = DQNAgent(
         # 状态维度
@@ -219,8 +212,7 @@ def main() -> None:
                 )
 
         for episode in range(1, args.episodes + 1):
-            env.reset()
-            state = get_env_state(env, state_mode)
+            state = env.reset()
             done = False
             info = {"score": 0}
             # 每局开始时蛇身长度为3(初始值)，后续吃到食物会增长
@@ -229,8 +221,7 @@ def main() -> None:
             # 评估时只进行动作采样和环境反馈。
             while not done:
                 action = agent.act(state, training=False)
-                _, _, done, info = env.step(action)
-                state = get_env_state(env, state_mode)
+                state, _, done, info = env.step(action)
                 # 每步记录蛇身长度，追踪本局峰值
                 current_length = int(info["snake_length"])
                 if current_length > max_snake_length:

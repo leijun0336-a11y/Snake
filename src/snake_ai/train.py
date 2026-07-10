@@ -59,15 +59,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def get_env_state(env: SnakeEnv, state_mode: str):
-    # 三种模式在这里统一分流，训练循环不需要了解状态的具体数据结构。
-    if state_mode == "hybrid":
-        return env.get_hybrid_state()
-    if state_mode == "grid":
-        return env.get_grid_state()
-    return env.get_state()
-
-
 # 统计列表的均值、标准差、最小值、最大值和最后一个值，返回字典
 def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
     return {
@@ -226,6 +217,8 @@ def main() -> None:
         # 渲染帧率，画面刷新速度
         fps=env_config.fps,  
         seed=train_config.seed,
+        # 环境直接在 reset()/step() 中返回对应 observation，避免训练循环重复构造状态。
+        state_mode=args.state_mode,
     )
     agent = DQNAgent(
         # 状态维度
@@ -316,8 +309,7 @@ def main() -> None:
 
         try:
             for episode in range(1, train_config.episodes + 1):
-                env.reset()
-                state = get_env_state(env, args.state_mode)
+                state = env.reset()
                 done = False
                 
                 # 记录一个episode中所有步的loss
@@ -330,8 +322,7 @@ def main() -> None:
                     # 训练时的动作采样
                     action = agent.act(state, training=True)
                     # 环境反馈，info是环境额外返回的信息字典，不直接参与DQN更新
-                    _, reward, done, info = env.step(action)
-                    next_state = get_env_state(env, args.state_mode)
+                    next_state, reward, done, info = env.step(action)
                     # 累加本局每一步的环境奖励，形成单局累计 reward。
                     episode_reward += reward
                     # 加入经验回放池
