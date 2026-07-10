@@ -29,8 +29,6 @@ class SnakeEnv:
     state_size = 19
     # 网格状态的通道数：边界、蛇身、蛇头、食物、蛇身顺序。
     grid_channels = 5
-    # 方向向量维度：left, right, up, down。
-    direction_size = 4
 
     def __init__(
         self,
@@ -188,7 +186,8 @@ class SnakeEnv:
     def grid_state_shape(self) -> tuple[int, int, int]:
         return self.grid_channels, self.height, self.width
 
-    def get_grid_state(self) -> tuple[list[list[list[float]]], list[float]]:
+    def get_grid_state(self) -> list[list[list[float]]]:
+        # 通道顺序固定为：边界、蛇身、蛇头、食物、蛇身顺序。
         grid = [
             [[0.0 for _ in range(self.width)] for _ in range(self.height)]
             for _ in range(self.grid_channels)
@@ -204,6 +203,7 @@ class SnakeEnv:
 
         snake_length = max(len(self.snake), 1)
         for index, point in enumerate(self.snake):
+            # 蛇头为 1.0，越接近尾巴数值越小，帮助 CNN 感知身体拓扑顺序。
             order_value = (snake_length - index) / snake_length
             grid[4][point.y][point.x] = order_value
             if index == 0:
@@ -212,7 +212,11 @@ class SnakeEnv:
                 grid[1][point.y][point.x] = 1.0
 
         grid[3][self.food.y][self.food.x] = 1.0
-        return grid, self._direction_one_hot()
+        return grid
+
+    def get_hybrid_state(self) -> tuple[list[list[list[float]]], list[float]]:
+        # Hybrid 模式同时提供完整网格和 19 维人工特征，在 Q 网络展平后拼接。
+        return self.get_grid_state(), self.get_state()
 
     # 判断是否撞墙或者吃到蛇自己。这里是严格判断，会把当前尾巴也算作身体。
     def is_collision(self, point: Point) -> bool:
@@ -318,14 +322,6 @@ class SnakeEnv:
             if point in body:
                 return distance / max_distance
         return 1.0
-
-    def _direction_one_hot(self) -> list[float]:
-        return [
-            float(self.direction == Direction.LEFT),
-            float(self.direction == Direction.RIGHT),
-            float(self.direction == Direction.UP),
-            float(self.direction == Direction.DOWN),
-        ]
 
     # 调用静态方法：不需要创建实例，直接用 类名.方法名() 就能用
     # 因为它不需要访问当前环境对象 self 里的任何状态

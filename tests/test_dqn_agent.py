@@ -19,9 +19,24 @@ def test_grid_agent_outputs_action() -> None:
         seed=1,
     )
     grid = [[[0.0 for _ in range(6)] for _ in range(6)] for _ in range(5)]
-    direction = [0.0, 1.0, 0.0, 0.0]
 
-    action = agent.act((grid, direction), training=False)
+    action = agent.act(grid, training=False)
+
+    assert action in (0, 1, 2)
+
+
+def test_hybrid_agent_outputs_action() -> None:
+    agent = DQNAgent(
+        state_size=(5, 6, 6),
+        action_size=3,
+        state_mode="hybrid",
+        auxiliary_size=19,
+        seed=1,
+    )
+    grid = [[[0.0 for _ in range(6)] for _ in range(6)] for _ in range(5)]
+    vector_state = [0.0] * 19
+
+    action = agent.act((grid, vector_state), training=False)
 
     assert action in (0, 1, 2)
 
@@ -63,3 +78,33 @@ def test_load_rejects_incompatible_state_mode(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="state_size|state_mode"):
         grid_agent.load(checkpoint_path)
+
+
+def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
+    checkpoint_path = tmp_path / "custom_cnn.pt"
+    trained_agent = DQNAgent(
+        state_size=(5, 8, 8),
+        action_size=3,
+        state_mode="hybrid",
+        auxiliary_size=19,
+        cnn_channels=24,
+        cnn_output_channels=12,
+        cnn_dilations=(1, 3),
+        cnn_pool_size=(4, 4),
+        seed=1,
+    )
+    trained_agent.save(checkpoint_path)
+
+    loaded_agent = DQNAgent(
+        state_size=(5, 8, 8),
+        action_size=3,
+        state_mode="hybrid",
+        auxiliary_size=19,
+        seed=1,
+    )
+    loaded_agent.load(checkpoint_path)
+
+    assert loaded_agent.cnn_channels == 24
+    assert loaded_agent.cnn_output_channels == 12
+    assert loaded_agent.cnn_dilations == (1, 3)
+    assert loaded_agent.cnn_pool_size == (4, 4)

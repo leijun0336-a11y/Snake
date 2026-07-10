@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a trained Snake DQN agent.")
     # 不传时默认加载 checkpoints/<最新 dqn_*>/best.pt；显式传入时使用用户指定路径。
     parser.add_argument("--checkpoint", type=Path, default=None)
-    parser.add_argument("--episodes", type=int, default=20)
+    parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
@@ -37,7 +37,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tensorboard", action="store_true")
     # 指定评估指标输出目录；不指定时默认绑定到最近一次训练的 runs/dqn_* 目录。
     parser.add_argument("--eval-output-dir", type=Path, default=None)
-    parser.add_argument("--state-mode", choices=("vector", "grid"), default=None)
+    parser.add_argument(
+        "--state-mode", choices=("vector", "grid", "hybrid"), default=None
+    )
     return parser.parse_args()
 
 
@@ -119,6 +121,9 @@ def get_checkpoint_state_mode(checkpoint_path: Path) -> str:
 
 
 def get_env_state(env: SnakeEnv, state_mode: str):
+    # 与训练入口保持完全相同的状态分流规则。
+    if state_mode == "hybrid":
+        return env.get_hybrid_state()
     if state_mode == "grid":
         return env.get_grid_state()
     return env.get_state()
@@ -132,6 +137,7 @@ def main() -> None:
     
     # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 best.pt。
     checkpoint_path = args.checkpoint or find_latest_best_checkpoint()
+    # 默认使用 checkpoint 记录的模式，避免手动选择错误的网络输入结构。
     state_mode = args.state_mode or get_checkpoint_state_mode(checkpoint_path)
 
     # ---- 确定评估日志输出目录 ----
@@ -167,7 +173,9 @@ def main() -> None:
     )
     agent = DQNAgent(
         # 状态维度
-        state_size=env.grid_state_shape if state_mode == "grid" else env.state_size,
+        state_size=(
+            env.grid_state_shape if state_mode in ("grid", "hybrid") else env.state_size
+        ),
         # 动作维度
         action_size=env.action_size,
         hidden_size=train_config.hidden_size,
@@ -176,7 +184,12 @@ def main() -> None:
         # epsilon值的下限(评估时Epsilon-Greedy关闭)
         epsilon_end=0.0,
         state_mode=state_mode,
-        direction_size=env.direction_size,
+        # load() 会在必要时使用 checkpoint 中的 CNN 参数重建当前默认网络。
+        auxiliary_size=env.state_size,
+        cnn_channels=train_config.cnn_channels,
+        cnn_output_channels=train_config.cnn_output_channels,
+        cnn_dilations=train_config.cnn_dilations,
+        cnn_pool_size=train_config.cnn_pool_size,
         seed=train_config.seed,
     )
 

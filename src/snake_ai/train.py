@@ -32,7 +32,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=EnvConfig.height)
     parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR)
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
-    parser.add_argument("--state-mode", choices=("vector", "grid"), default="vector")
+    parser.add_argument(
+        "--state-mode", choices=("vector", "grid", "hybrid"), default="vector"
+    )
+    # 这些参数只影响 Grid/Hybrid 的卷积主干，Vector baseline 会忽略它们。
+    parser.add_argument("--cnn-channels", type=int, default=TrainConfig.cnn_channels)
+    parser.add_argument(
+        "--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels
+    )
+    parser.add_argument(
+        "--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations
+    )
+    parser.add_argument(
+        "--cnn-pool-size", type=int, nargs=2, default=TrainConfig.cnn_pool_size
+    )
     # 关闭早停后会严格跑满最大训练局数。
     parser.add_argument("--no-early-stop", action="store_true")
     # 至少训练多少局后，才允许早停判断生效。
@@ -47,6 +60,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def get_env_state(env: SnakeEnv, state_mode: str):
+    # 三种模式在这里统一分流，训练循环不需要了解状态的具体数据结构。
+    if state_mode == "hybrid":
+        return env.get_hybrid_state()
     if state_mode == "grid":
         return env.get_grid_state()
     return env.get_state()
@@ -166,6 +182,12 @@ def main() -> None:
         raise ValueError("min_episodes must be at least 1")
     if args.min_episodes > max_episodes:
         raise ValueError("min_episodes must be less than or equal to max episodes")
+    if args.cnn_channels <= 0 or args.cnn_output_channels <= 0:
+        raise ValueError("CNN channel sizes must be positive")
+    if any(dilation <= 0 for dilation in args.cnn_dilations):
+        raise ValueError("cnn_dilations must contain positive integers")
+    if any(size <= 0 for size in args.cnn_pool_size):
+        raise ValueError("cnn_pool_size must contain positive integers")
 
     train_config = TrainConfig(episodes=max_episodes)
     set_seed(train_config.seed)
@@ -207,7 +229,11 @@ def main() -> None:
     )
     agent = DQNAgent(
         # 状态维度
-        state_size=env.grid_state_shape if args.state_mode == "grid" else env.state_size,
+        state_size=(
+            env.grid_state_shape
+            if args.state_mode in ("grid", "hybrid")
+            else env.state_size
+        ),
         # 动作维度
         action_size=env.action_size, 
         hidden_size=train_config.hidden_size,
@@ -227,7 +253,12 @@ def main() -> None:
         # Q训练网络更新一次视为一步，当经验池满后，则等价于贪吃蛇走一步
         target_update_interval=train_config.target_update_interval,   
         state_mode=args.state_mode,
-        direction_size=env.direction_size,
+        # Hybrid 拼接的是完整 get_state()，因此辅助向量维度等于环境 state_size。
+        auxiliary_size=env.state_size,
+        cnn_channels=args.cnn_channels,
+        cnn_output_channels=args.cnn_output_channels,
+        cnn_dilations=tuple(args.cnn_dilations),
+        cnn_pool_size=tuple(args.cnn_pool_size),
         seed=train_config.seed,
     )
 

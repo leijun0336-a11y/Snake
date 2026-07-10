@@ -67,6 +67,12 @@ uv run python -m snake_ai.train
 uv run python -m snake_ai.train --state-mode grid
 ```
 
+训练网格 CNN 与 19 维人工状态融合的 Hybrid state：
+
+```bash
+uv run python -m snake_ai.train --state-mode hybrid
+```
+
 训练产物：
 
 - `checkpoints/<run_name>/best.pt`
@@ -106,7 +112,11 @@ uv run python -m snake_ai.evaluate
 - `--height`：游戏网格高度。
 - `--checkpoint-dir`：checkpoint 输出目录。
 - `--runs-dir`：训练日志输出目录。
-- `--state-mode`：状态输入模式，`vector` 使用 19 维人工特征，`grid` 使用多通道网格和小型 CNN；默认 `vector`。
+- `--state-mode`：状态输入模式，可选 `vector`、`grid`、`hybrid`；默认 `vector`。
+- `--cnn-channels`：Grid/Hybrid CNN 主干通道数，默认 `32`。
+- `--cnn-output-channels`：1x1 卷积压缩后的通道数，默认 `16`。
+- `--cnn-dilations`：空洞残差块的 dilation 序列，默认 `1 2 4`。
+- `--cnn-pool-size`：自适应平均池化输出的高和宽，默认 `5 5`。
 - `--no-early-stop`：关闭训练早停。
 - `--min-episodes`：早停生效前至少训练的 episode 数量。
 - `--patience`：超过最小训练局数后，允许连续多少个 episode 没有有效提升。
@@ -165,12 +175,11 @@ TensorBoard 参数：
 | 18 | `body_distance_right` | 右转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 | 19 | `body_distance_left` | 左转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 
-`SnakeEnv.get_grid_state()` 返回多通道网格状态，作为 CNN Q 网络输入：
+`SnakeEnv.get_grid_state()` 返回纯多通道网格状态，作为 Grid CNN Q 网络输入：
 
 | 部分 | 形状 | 含义 |
 |------|------|------|
 | grid | `[5, height, width]` | 多通道符号网格。 |
-| direction | `[4]` | 当前方向 one-hot，顺序为 left、right、up、down。 |
 
 grid 通道说明：
 
@@ -182,7 +191,32 @@ grid 通道说明：
 | 3 | 食物。 |
 | 4 | 蛇身顺序，蛇头为 `1.0`，越靠近尾巴数值越小。 |
 
-默认 `--state-mode vector` 保留 19 维 MLP baseline；`--state-mode grid` 使用轻量 CNN + Dueling head。不同 state mode 的 checkpoint 不能混用。
+`SnakeEnv.get_hybrid_state()` 返回 `(grid, vector_state)`：`grid` 形状仍为
+`[5, height, width]`，`vector_state` 是 `get_state()` 返回的完整 19 维人工状态。
+Hybrid Q 网络先提取并展平 CNN 特征，再与 19 维状态拼接。
+
+三种模式用于对照实验：
+
+| 模式 | Q 网络输入 | 用途 |
+|------|------------|------|
+| `vector` | 19 维人工状态 | 保留原始 MLP baseline。 |
+| `grid` | 纯 5 通道网格 | 检验空洞 CNN 从网格端到端提取特征的能力，不额外拼接方向向量。 |
+| `hybrid` | 5 通道网格 + 19 维人工状态 | 结合全图布局与人工特征，提高有限算力下的学习效率。 |
+
+Grid 和 Hybrid 共用轻量空洞 CNN，默认结构为：
+
+```text
+5 通道网格
+  -> 3x3 Conv（32 通道）
+  -> DilatedResidualBlock（dilation=1, 2, 4）
+  -> 1x1 Conv（16 通道）
+  -> AdaptiveAvgPool2d(5, 5)
+  -> Flatten（400 维）
+```
+
+Grid 模式把 400 维 CNN 特征直接送入共享全连接层；Hybrid 模式先拼接 19 维人工状态，形成 419 维特征，再送入共享全连接层。两者最后都连接 Dueling 的 `V(s)` 和 `A(s,a)` 分支。
+
+CNN 的主干通道数、压缩通道数、dilation 序列和池化尺寸已经参数化。训练保存的 checkpoint 会记录这些架构参数，评估时自动按 checkpoint 重建网络。不同 state mode 的 checkpoint 不能混用；旧的“grid + 4 维方向向量”checkpoint 与当前纯 Grid CNN 结构不兼容，会明确报错而不会静默加载。
 
 ## 指标说明
 

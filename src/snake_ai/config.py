@@ -44,5 +44,13 @@ class TrainConfig:
     target_update_interval: int = 1000
     # Q 网络隐藏层神经元数量。
     hidden_size: int = 128
+    # Grid/Hybrid CNN 主干通道数。
+    cnn_channels: int = 32
+    # 1x1 卷积压缩后的通道数。
+    cnn_output_channels: int = 16
+    # 空洞残差块的 dilation 序列。
+    cnn_dilations: tuple[int, ...] = (1, 2, 4)
+    # 自适应平均池化输出的高和宽。
+    cnn_pool_size: tuple[int, int] = (5, 5)
     # 随机种子，用于让初始化、探索和食物生成尽量可复现。
     seed: int = 42

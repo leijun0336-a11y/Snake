@@ -6,7 +6,7 @@ import random
 from collections import deque
 from dataclasses import dataclass
 # 用于给双端队列声明元素类型。
-from typing import Deque
+from typing import Any, Deque
 
 
 @dataclass(frozen=True)  # frozen=True，创建后字段不能被重新赋值。
@@ -14,13 +14,13 @@ from typing import Deque
 # 定义一条"经验"中包含哪些数据，成为经验类
 class Transition:
     # 当前状态，也就是执行动作前的状态。
-    state: list[float]
+    state: Any
     # 在当前状态下执行的动作。
     action: int
     # 执行动作后环境返回的奖励。
     reward: float
     # 执行动作后环境返回的下一个状态。
-    next_state: list[float]
+    next_state: Any
     # 执行动作后这一局是否结束。
     done: bool
 
@@ -37,10 +37,10 @@ class ReplayBuffer:
 
     def push(
         self,
-        state: list[float],
+        state: Any,
         action: int,
         reward: float,
-        next_state: list[float],
+        next_state: Any,
         done: bool,
     ) -> None:
         # 把一次交互产生的 state/action/reward/next_state/done 打包成 Transition 存入经验池。

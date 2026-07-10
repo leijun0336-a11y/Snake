@@ -15,7 +15,7 @@ from snake_ai.models.q_network import QNetwork
 class DQNAgent:
     def __init__(
         self,
-        # 状态向量维度，由环境的 state_size 决定。
+        # 状态维度，如果是vector模式输入向量，CNN模式和hibrid模式都输入网格。
         state_size: int | tuple[int, int, int],
         # 动作数量，当前为 3：直行、右转、左转。
         action_size: int,
@@ -41,8 +41,16 @@ class DQNAgent:
         dueling: bool = True,
         # 状态输入模式：vector 使用人工低维状态，grid 使用多通道网格状态。
         state_mode: str = "vector",
-        # grid 模式下额外拼接的方向 one-hot 向量维度。
-        direction_size: int = 4,
+        # Hybrid 模式下与 CNN 特征拼接的人工状态维度。
+        auxiliary_size: int = 19,
+        # Grid/Hybrid CNN 主干通道数。
+        cnn_channels: int = 32,
+        # 1x1 卷积压缩后的通道数。
+        cnn_output_channels: int = 16,
+        # 空洞残差块的 dilation 序列。
+        cnn_dilations: tuple[int, ...] = (1, 2, 4),
+        # 自适应平均池化输出尺寸。
+        cnn_pool_size: tuple[int, int] = (5, 5),
         # 随机种子，用于让探索、采样和网络初始化尽量可复现。
         seed: int = 42,
         # 计算设备；不传时优先使用 cuda，否则使用 cpu。
@@ -52,7 +60,11 @@ class DQNAgent:
         self.action_size = action_size
         self.hidden_size = hidden_size
         self.state_mode = state_mode
-        self.direction_size = direction_size
+        self.auxiliary_size = auxiliary_size
+        self.cnn_channels = cnn_channels
+        self.cnn_output_channels = cnn_output_channels
+        self.cnn_dilations = tuple(cnn_dilations)
+        self.cnn_pool_size = tuple(cnn_pool_size)
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
@@ -175,24 +187,30 @@ class DQNAgent:
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
     def _build_network(self) -> QNetwork:
+        # Policy/Target 网络都通过此方法构建，确保它们使用完全相同的状态模式和 CNN 配置。
         return QNetwork(
             self.state_size,
             self.hidden_size,
             self.action_size,
             dueling=self.dueling,
             state_mode=self.state_mode,
-            direction_size=self.direction_size,
+            auxiliary_size=self.auxiliary_size,
+            cnn_channels=self.cnn_channels,
+            cnn_output_channels=self.cnn_output_channels,
+            cnn_dilations=self.cnn_dilations,
+            cnn_pool_size=self.cnn_pool_size,
         ).to(self.device)
 
     def _state_batch_to_tensor(
         self, states: list[Any]
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        if self.state_mode == "grid":
+        if self.state_mode == "hybrid":
+            # Hybrid replay 中每条 state 都是 (grid, 19维人工状态)，分别组成两个 batch。
             grids = torch.tensor([state[0] for state in states], dtype=torch.float32, device=self.device)
-            directions = torch.tensor(
+            auxiliary_states = torch.tensor(
                 [state[1] for state in states], dtype=torch.float32, device=self.device
             )
-            return grids, directions
+            return grids, auxiliary_states
         return torch.tensor(states, dtype=torch.float32, device=self.device)
 
     # 把当前训练状态存到文件里
@@ -214,7 +232,12 @@ class DQNAgent:
                 # 状态向量维度，方便加载时检查环境和模型是否匹配。
                 "state_size": self.state_size,
                 "state_mode": self.state_mode,
-                "direction_size": self.direction_size,
+                # 保存完整 CNN 架构，评估自定义结构时才能准确重建网络。
+                "auxiliary_size": self.auxiliary_size,
+                "cnn_channels": self.cnn_channels,
+                "cnn_output_channels": self.cnn_output_channels,
+                "cnn_dilations": self.cnn_dilations,
+                "cnn_pool_size": self.cnn_pool_size,
                 # 动作数量，方便加载时检查环境和模型是否匹配。
                 "hidden_size": self.hidden_size,
                 "action_size": self.action_size,
@@ -236,7 +259,45 @@ class DQNAgent:
         if isinstance(checkpoint_state_size, list):
             checkpoint_state_size = tuple(checkpoint_state_size)
         checkpoint_state_mode = str(checkpoint.get("state_mode", "vector"))
-        checkpoint_direction_size = int(checkpoint.get("direction_size", self.direction_size))
+        # 旧 Grid 权重曾拼接 4 维方向向量，与当前纯 CNN Grid 的全连接层形状不同。
+        if checkpoint_state_mode == "grid" and "direction_size" in checkpoint:
+            raise ValueError(
+                "This checkpoint uses the former grid + direction architecture. "
+                "The current grid mode is CNN-only; retrain it or use a matching older revision."
+            )
+        checkpoint_auxiliary_size = self.auxiliary_size
+        checkpoint_cnn_channels = self.cnn_channels
+        checkpoint_cnn_output_channels = self.cnn_output_channels
+        checkpoint_cnn_dilations = self.cnn_dilations
+        checkpoint_cnn_pool_size = self.cnn_pool_size
+        if checkpoint_state_mode in ("grid", "hybrid"):
+            # Grid/Hybrid 禁止缺失字段时退回默认架构，避免静默加载错误的网络结构。
+            required_cnn_fields = {
+                "cnn_channels",
+                "cnn_output_channels",
+                "cnn_dilations",
+                "cnn_pool_size",
+            }
+            if checkpoint_state_mode == "hybrid":
+                required_cnn_fields.add("auxiliary_size")
+            missing_fields = required_cnn_fields.difference(checkpoint)
+            if missing_fields:
+                missing_text = ", ".join(sorted(missing_fields))
+                raise ValueError(
+                    f"Checkpoint is missing CNN architecture fields: {missing_text}."
+                )
+
+            checkpoint_auxiliary_size = int(
+                checkpoint.get("auxiliary_size", self.auxiliary_size)
+            )
+            checkpoint_cnn_channels = int(checkpoint["cnn_channels"])
+            checkpoint_cnn_output_channels = int(checkpoint["cnn_output_channels"])
+            checkpoint_cnn_dilations = tuple(
+                int(value) for value in checkpoint["cnn_dilations"]
+            )
+            checkpoint_cnn_pool_size = tuple(
+                int(value) for value in checkpoint["cnn_pool_size"]
+            )
         if checkpoint_state_size != self.state_size:
             raise ValueError(
                 f"Checkpoint state_size={checkpoint_state_size} does not match "
@@ -248,15 +309,27 @@ class DQNAgent:
                 f"Checkpoint state_mode={checkpoint_state_mode!r} does not match "
                 f"current agent state_mode={self.state_mode!r}."
             )
-        if checkpoint_direction_size != self.direction_size:
+        if checkpoint_state_mode == "hybrid" and checkpoint_auxiliary_size != self.auxiliary_size:
             raise ValueError(
-                f"Checkpoint direction_size={checkpoint_direction_size} does not match "
-                f"current agent direction_size={self.direction_size}."
+                f"Checkpoint auxiliary_size={checkpoint_auxiliary_size} does not match "
+                f"current agent auxiliary_size={self.auxiliary_size}."
             )
-        # 如果checkpoint中的权重和当前网络不适配，则重建网络来适配权重。
-        if checkpoint_dueling != self.dueling or checkpoint_hidden_size != self.hidden_size:
+        architecture_changed = (
+            checkpoint_dueling != self.dueling
+            or checkpoint_hidden_size != self.hidden_size
+            or checkpoint_cnn_channels != self.cnn_channels
+            or checkpoint_cnn_output_channels != self.cnn_output_channels
+            or checkpoint_cnn_dilations != self.cnn_dilations
+            or checkpoint_cnn_pool_size != self.cnn_pool_size
+        )
+        # 按 checkpoint 中记录的完整架构参数重建网络，再加载对应权重。
+        if architecture_changed:
             self.dueling = checkpoint_dueling
             self.hidden_size = checkpoint_hidden_size
+            self.cnn_channels = checkpoint_cnn_channels
+            self.cnn_output_channels = checkpoint_cnn_output_channels
+            self.cnn_dilations = checkpoint_cnn_dilations
+            self.cnn_pool_size = checkpoint_cnn_pool_size
             self.policy_net = self._build_network()
             self.target_net = self._build_network()
             self.target_net.eval()
