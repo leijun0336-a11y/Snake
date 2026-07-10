@@ -63,7 +63,7 @@ class QNetwork(nn.Module):
             # Grid 和 Hybrid 共用同一套空洞卷积主干，保证对照实验只改变输入融合方式。
             if not isinstance(input_size, tuple):
                 raise TypeError("grid and hybrid modes expect input_size=(channels, height, width)")
-            channels, _, _ = input_size
+            channels, height, width = input_size
             cnn_layers: list[nn.Module] = [
                 nn.Conv2d(channels, cnn_channels, kernel_size=3, padding=1),
                 nn.ReLU(),
@@ -79,7 +79,7 @@ class QNetwork(nn.Module):
                     nn.Conv2d(cnn_channels, cnn_output_channels, kernel_size=1),
                     nn.ReLU(),
                     # 固定池化输出尺寸，让不同地图大小都能接入同一个全连接层。
-                    nn.AdaptiveAvgPool2d(cnn_pool_size),
+                    self._build_pool_layer(height, width, cnn_pool_size),
                     nn.Flatten(),
                 ]
             )
@@ -105,6 +105,19 @@ class QNetwork(nn.Module):
 
         self.value_stream = nn.Linear(feature_size, 1)
         self.advantage_stream = nn.Linear(feature_size, output_size)
+
+
+    @staticmethod
+    def _build_pool_layer(
+        height: int, width: int, pool_size: tuple[int, int]
+    ) -> nn.Module:
+        pool_height, pool_width = pool_size
+        if height % pool_height == 0 and width % pool_width == 0:
+            return nn.AvgPool2d(
+                kernel_size=(height // pool_height, width // pool_width),
+                stride=(height // pool_height, width // pool_width),
+            )
+        return nn.AdaptiveAvgPool2d(pool_size)
 
     def forward(
         self, x: torch.Tensor | tuple[torch.Tensor, torch.Tensor]

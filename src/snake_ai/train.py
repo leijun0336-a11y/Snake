@@ -35,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--state-mode", choices=("vector", "grid", "hybrid"), default="vector"
     )
+    # 完全确定性会让部分 CUDA 卷积/池化算子明显变慢；默认优先训练速度。
+    parser.add_argument("--deterministic", action="store_true")
     # 这些参数只影响 Grid/Hybrid 的卷积主干，Vector baseline 会忽略它们。
     parser.add_argument("--cnn-channels", type=int, default=TrainConfig.cnn_channels)
     parser.add_argument(
@@ -181,7 +183,7 @@ def main() -> None:
         raise ValueError("cnn_pool_size must contain positive integers")
 
     train_config = TrainConfig(episodes=max_episodes)
-    set_seed(train_config.seed)
+    set_seed(train_config.seed, deterministic=args.deterministic)
     env_config = EnvConfig(width=args.width, height=args.height)
 
     # 假设你在 2026 年 7 月 7 日 下午 3 点 30 分 45 秒 执行了这行代码
@@ -425,7 +427,7 @@ def main() -> None:
 
                 # 每个episode输出一次指标信息
                 print(
-                    f"episode={episode:4d} score={score:3d} "
+                    f"episode={episode:4d} score={score:3d} steps={episode_steps:4d} "
                     f"reward={episode_reward:6.1f} "
                     f"mean100={mean_score:6.2f} epsilon={agent.epsilon:.3f} "
                     f"loss={mean_loss:.4f} best_score={best_score}"
