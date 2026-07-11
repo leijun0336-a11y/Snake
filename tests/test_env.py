@@ -65,6 +65,20 @@ def test_state_and_grid_include_normalized_hunger_progress() -> None:
     assert env.get_grid_state().shape[0] == 9
 
 
+def test_grid_state_does_not_overwrite_down_head_channel() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1)
+    env.snake = [Point(2, 2), Point(2, 1), Point(2, 0)]
+    env.direction = Direction.DOWN
+    env.food = Point(4, 3)
+    env.steps_since_food = 18
+
+    grid = env.get_grid_state()
+
+    assert grid[5][2][2] == 1.0
+    assert float(grid[5].sum()) == 1.0
+    assert sum(float(grid[channel].sum()) for channel in range(2, 6)) == 1.0
+
+
 def test_hybrid_state_contains_grid_and_vector_state() -> None:
     env = SnakeEnv(width=6, height=6, seed=1)
 

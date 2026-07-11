@@ -1,5 +1,5 @@
 # 处理自引用问题
-from __future__ import annotations  
+from __future__ import annotations
 
 import argparse
 import csv
@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     # 关闭早停后会严格跑满最大训练局数。
     parser.add_argument("--no-early-stop", action="store_true")
     # 至少训练多少局后，才允许早停判断生效。
-    parser.add_argument("--min-episodes", type=int, default=1000)
+    parser.add_argument("--min-episodes", type=int, default=5000)
     # 超过最小训练局数后，允许连续多少局没有有效提升。
     parser.add_argument("--patience", type=int, default=500)
     # mean_score_100 至少提升多少，才算一次有效提升。

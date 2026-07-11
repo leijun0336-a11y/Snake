@@ -35,7 +35,7 @@ class SnakeEnv:
     action_size = 3
     # 状态维度：11 个原始方向/危险特征 + 8 个距离特征 + 1 个饥饿进度。
     state_size = 20
-    # 网格状态的通道数：边界、蛇身、蛇头、食物、蛇身顺序、饥饿进度。
+    # 网格状态的通道数：边界、蛇身、蛇头、蛇尾、食物、蛇身顺序。
     grid_channels = 9
 
     def __init__(
@@ -264,7 +264,7 @@ class SnakeEnv:
         return self.grid_channels, self.height, self.width
 
     def get_grid_state(self) -> GridState:
-        # 通道顺序固定为：边界、蛇身、蛇头、食物、蛇身顺序、饥饿进度。
+        # 通道顺序固定为：边界、蛇身、蛇头、蛇尾、食物、蛇身顺序。
         # float32 连续数组可被 torch.from_numpy 直接读取，避免递归转换 Python 嵌套列表。
         grid = np.zeros(
             (self.grid_channels, self.height, self.width),
@@ -299,8 +299,6 @@ class SnakeEnv:
         tail = self.snake[-1]
         grid[6, tail.y, tail.x] = 1.0
         grid[7, self.food.y, self.food.x] = 1.0
-        # 常数平面把全局饥饿比例提供给纯 CNN，同时保持 observation 为单个张量。
-        grid[5, :, :] = self.hunger_ratio
         return grid
 
     def get_hybrid_state(self) -> HybridState:

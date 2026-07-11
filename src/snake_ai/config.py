@@ -17,8 +17,8 @@ class EnvConfig:
 
 @dataclass(frozen=True)
 class TrainConfig:
-    episodes: int = 5000
-    batch_size: int = 64
+    episodes: int = 15000
+    batch_size: int = 128
     gamma: float = 0.99
     learning_rate: float = 1e-3
     replay_buffer_size: int = 100_000
@@ -26,7 +26,7 @@ class TrainConfig:
     epsilon_end: float = 0.01
     epsilon_decay: float = 0.995
     target_update_interval: int = 1000
-    hidden_size: int = 128
+    hidden_size: int = 256
     cnn_channels: int = 32
     cnn_output_channels: int = 8
     cnn_dilations: tuple[int, ...] = (1, 1, 2)
