@@ -33,6 +33,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
+    parser.add_argument("--cell-size", type=int, default=EnvConfig.cell_size)
+    parser.add_argument("--fps", type=int, default=EnvConfig.fps)
+    parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     # 是否把本次评估的分数写入 CSV 和 TensorBoard。
     parser.add_argument("--tensorboard", action="store_true")
     # 指定评估指标输出目录；不指定时默认绑定到最近一次训练的 runs/dqn_* 目录。
@@ -122,9 +125,20 @@ def get_checkpoint_state_mode(checkpoint_path: Path) -> str:
 
 def main() -> None:
     args = parse_args()
-    train_config = TrainConfig()
+    if args.episodes < 1:
+        raise ValueError("episodes must be at least 1")
+    if args.width < 4 or args.height < 4:
+        raise ValueError("width and height must be at least 4")
+    if args.cell_size < 1 or args.fps < 1:
+        raise ValueError("cell_size and fps must be positive")
+    train_config = TrainConfig(seed=args.seed)
     set_seed(train_config.seed)
-    env_config = EnvConfig(width=args.width, height=args.height)
+    env_config = EnvConfig(
+        width=args.width,
+        height=args.height,
+        cell_size=args.cell_size,
+        fps=args.fps,
+    )
     
     # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 best.pt。
     checkpoint_path = args.checkpoint or find_latest_best_checkpoint()

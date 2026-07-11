@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
+    parser.add_argument("--cell-size", type=int, default=EnvConfig.cell_size)
+    parser.add_argument("--fps", type=int, default=EnvConfig.fps)
     parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR)
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
     parser.add_argument(
@@ -47,6 +49,22 @@ def parse_args() -> argparse.Namespace:
     )
     # 完全确定性会让部分 CUDA 卷积/池化算子明显变慢；默认优先训练速度。
     parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
+    parser.add_argument("--gamma", type=float, default=TrainConfig.gamma)
+    parser.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate)
+    parser.add_argument(
+        "--replay-buffer-size", type=int, default=TrainConfig.replay_buffer_size
+    )
+    parser.add_argument("--epsilon-start", type=float, default=TrainConfig.epsilon_start)
+    parser.add_argument("--epsilon-end", type=float, default=TrainConfig.epsilon_end)
+    parser.add_argument("--epsilon-decay", type=float, default=TrainConfig.epsilon_decay)
+    parser.add_argument(
+        "--target-update-interval",
+        type=int,
+        default=TrainConfig.target_update_interval,
+    )
+    parser.add_argument("--hidden-size", type=int, default=TrainConfig.hidden_size)
+    parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     # 这些参数只影响 Grid/Hybrid 的卷积主干，Vector baseline 会忽略它们。
     parser.add_argument("--cnn-channels", type=int, default=TrainConfig.cnn_channels)
     parser.add_argument(
@@ -181,6 +199,22 @@ def main() -> None:
     max_episodes = args.episodes if args.episodes is not None else args.max_episodes
     if max_episodes < 1:
         raise ValueError("max episodes must be at least 1")
+    if args.width < 4 or args.height < 4:
+        raise ValueError("width and height must be at least 4")
+    if args.cell_size < 1 or args.fps < 1:
+        raise ValueError("cell_size and fps must be positive")
+    if args.batch_size < 1 or args.replay_buffer_size < args.batch_size:
+        raise ValueError("replay_buffer_size must be at least batch_size >= 1")
+    if not 0.0 <= args.gamma <= 1.0:
+        raise ValueError("gamma must be between 0 and 1")
+    if args.learning_rate <= 0.0:
+        raise ValueError("learning_rate must be positive")
+    if not 0.0 <= args.epsilon_end <= args.epsilon_start <= 1.0:
+        raise ValueError("epsilon values must satisfy 0 <= end <= start <= 1")
+    if not 0.0 < args.epsilon_decay <= 1.0:
+        raise ValueError("epsilon_decay must be in (0, 1]")
+    if args.target_update_interval < 1 or args.hidden_size < 1:
+        raise ValueError("target_update_interval and hidden_size must be positive")
     if args.min_episodes < 1:
         raise ValueError("min_episodes must be at least 1")
     if args.min_episodes > max_episodes:
@@ -192,9 +226,30 @@ def main() -> None:
     if any(size <= 0 for size in args.cnn_pool_size):
         raise ValueError("cnn_pool_size must contain positive integers")
 
-    train_config = TrainConfig(episodes=max_episodes)
+    train_config = TrainConfig(
+        episodes=max_episodes,
+        batch_size=args.batch_size,
+        gamma=args.gamma,
+        learning_rate=args.learning_rate,
+        replay_buffer_size=args.replay_buffer_size,
+        epsilon_start=args.epsilon_start,
+        epsilon_end=args.epsilon_end,
+        epsilon_decay=args.epsilon_decay,
+        target_update_interval=args.target_update_interval,
+        hidden_size=args.hidden_size,
+        cnn_channels=args.cnn_channels,
+        cnn_output_channels=args.cnn_output_channels,
+        cnn_dilations=tuple(args.cnn_dilations),
+        cnn_pool_size=tuple(args.cnn_pool_size),
+        seed=args.seed,
+    )
     set_seed(train_config.seed, deterministic=args.deterministic)
-    env_config = EnvConfig(width=args.width, height=args.height)
+    env_config = EnvConfig(
+        width=args.width,
+        height=args.height,
+        cell_size=args.cell_size,
+        fps=args.fps,
+    )
 
     # 假设你在 2026 年 7 月 7 日 下午 3 点 30 分 45 秒 执行了这行代码
     # 最后生成的 run_name 字符串就会是"dqn_20260707_153045"
@@ -263,10 +318,10 @@ def main() -> None:
         state_mode=args.state_mode,
         # Hybrid 拼接的是完整 get_state()，因此辅助向量维度等于环境 state_size。
         auxiliary_size=env.state_size,
-        cnn_channels=args.cnn_channels,
-        cnn_output_channels=args.cnn_output_channels,
-        cnn_dilations=tuple(args.cnn_dilations),
-        cnn_pool_size=tuple(args.cnn_pool_size),
+        cnn_channels=train_config.cnn_channels,
+        cnn_output_channels=train_config.cnn_output_channels,
+        cnn_dilations=train_config.cnn_dilations,
+        cnn_pool_size=train_config.cnn_pool_size,
         seed=train_config.seed,
     )
 
