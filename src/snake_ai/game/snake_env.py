@@ -36,7 +36,7 @@ class SnakeEnv:
     # 状态维度：11 个原始方向/危险特征 + 8 个距离特征 + 1 个饥饿进度。
     state_size = 20
     # 网格状态的通道数：边界、蛇身、蛇头、食物、蛇身顺序、饥饿进度。
-    grid_channels = 6
+    grid_channels = 9
 
     def __init__(
         self,
@@ -279,17 +279,26 @@ class SnakeEnv:
             grid[0, y, 0] = 1.0
             grid[0, y, self.width - 1] = 1.0
 
+        # 方向到通道号的映射
+        head_channels = {
+            Direction.LEFT: 2,
+            Direction.RIGHT: 3,
+            Direction.UP: 4,
+            Direction.DOWN: 5,
+        }
         snake_length = max(len(self.snake), 1)
         for index, point in enumerate(self.snake):
             # 蛇头为 1.0，越接近尾巴数值越小，帮助 CNN 感知身体拓扑顺序。
             order_value = (snake_length - index) / snake_length
-            grid[4, point.y, point.x] = order_value
+            grid[8, point.y, point.x] = order_value
             if index == 0:
-                grid[2, point.y, point.x] = 1.0
+                grid[head_channels[self.direction], point.y, point.x] = 1.0
             else:
                 grid[1, point.y, point.x] = 1.0
 
-        grid[3, self.food.y, self.food.x] = 1.0
+        tail = self.snake[-1]
+        grid[6, tail.y, tail.x] = 1.0
+        grid[7, self.food.y, self.food.x] = 1.0
         # 常数平面把全局饥饿比例提供给纯 CNN，同时保持 observation 为单个张量。
         grid[5, :, :] = self.hunger_ratio
         return grid

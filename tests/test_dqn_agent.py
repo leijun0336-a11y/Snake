@@ -14,12 +14,28 @@ def test_dueling_agent_outputs_action() -> None:
 
 def test_grid_agent_outputs_action() -> None:
     agent = DQNAgent(
-        state_size=(6, 6, 6),
+        state_size=(9, 6, 6),
         action_size=3,
         state_mode="grid",
         seed=1,
     )
-    grid = np.zeros((6, 6, 6), dtype=np.float32)
+    grid = np.zeros((9, 6, 6), dtype=np.float32)
+    grid[3, 3, 3] = 1.0
+
+    action = agent.act(grid, training=False)
+
+    assert action in (0, 1, 2)
+
+
+def test_grid_agent_crops_local_features_at_board_edge() -> None:
+    agent = DQNAgent(
+        state_size=(9, 6, 6),
+        action_size=3,
+        state_mode="grid",
+        seed=1,
+    )
+    grid = np.zeros((9, 6, 6), dtype=np.float32)
+    grid[4, 0, 0] = 1.0
 
     action = agent.act(grid, training=False)
 
@@ -28,13 +44,14 @@ def test_grid_agent_outputs_action() -> None:
 
 def test_hybrid_agent_outputs_action() -> None:
     agent = DQNAgent(
-        state_size=(6, 6, 6),
+        state_size=(9, 6, 6),
         action_size=3,
         state_mode="hybrid",
         auxiliary_size=20,
         seed=1,
     )
-    grid = np.zeros((6, 6, 6), dtype=np.float32)
+    grid = np.zeros((9, 6, 6), dtype=np.float32)
+    grid[3, 3, 3] = 1.0
     vector_state = [0.0] * 20
 
     action = agent.act((grid, vector_state), training=False)
@@ -45,14 +62,15 @@ def test_hybrid_agent_outputs_action() -> None:
 @pytest.mark.parametrize("state_mode", ["grid", "hybrid"])
 def test_cnn_agent_learns_from_numpy_replay_batch(state_mode: str) -> None:
     agent = DQNAgent(
-        state_size=(6, 6, 6),
+        state_size=(9, 6, 6),
         action_size=3,
         state_mode=state_mode,
         auxiliary_size=20,
         batch_size=2,
         seed=1,
     )
-    grid = np.zeros((6, 6, 6), dtype=np.float32)
+    grid = np.zeros((9, 6, 6), dtype=np.float32)
+    grid[3, 3, 3] = 1.0
     vector_state = [0.0] * 20
     state = (grid, vector_state) if state_mode == "hybrid" else grid
 
@@ -92,7 +110,7 @@ def test_load_rejects_incompatible_state_mode(tmp_path) -> None:
     vector_agent.save(checkpoint_path)
 
     grid_agent = DQNAgent(
-        state_size=(6, 6, 6),
+        state_size=(9, 6, 6),
         action_size=3,
         state_mode="grid",
         seed=1,
@@ -105,7 +123,7 @@ def test_load_rejects_incompatible_state_mode(tmp_path) -> None:
 def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     checkpoint_path = tmp_path / "custom_cnn.pt"
     trained_agent = DQNAgent(
-        state_size=(6, 8, 8),
+        state_size=(9, 8, 8),
         action_size=3,
         state_mode="hybrid",
         auxiliary_size=20,
@@ -118,7 +136,7 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     trained_agent.save(checkpoint_path)
 
     loaded_agent = DQNAgent(
-        state_size=(6, 8, 8),
+        state_size=(9, 8, 8),
         action_size=3,
         state_mode="hybrid",
         auxiliary_size=20,

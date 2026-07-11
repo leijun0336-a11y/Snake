@@ -47,11 +47,11 @@ class DQNAgent:
         # Grid/Hybrid CNN 主干通道数。
         cnn_channels: int = 32,
         # 1x1 卷积压缩后的通道数。
-        cnn_output_channels: int = 16,
+        cnn_output_channels: int = 8,
         # 空洞残差块的 dilation 序列。
-        cnn_dilations: tuple[int, ...] = (1, 2, 4),
+        cnn_dilations: tuple[int, ...] = (1, 1, 2),
         # 自适应平均池化输出尺寸。
-        cnn_pool_size: tuple[int, int] = (5, 5),
+        cnn_pool_size: tuple[int, int] = (10, 10),
         # 随机种子，用于让探索、采样和网络初始化尽量可复现。
         seed: int = 42,
         # 计算设备；不传时优先使用 cuda，否则使用 cpu。
@@ -264,6 +264,7 @@ class DQNAgent:
                 "hidden_size": self.hidden_size,
                 "action_size": self.action_size,
                 "dueling": self.dueling,
+                "architecture_version": 2,
             },
             path,
         )
@@ -281,6 +282,14 @@ class DQNAgent:
         if isinstance(checkpoint_state_size, list):
             checkpoint_state_size = tuple(checkpoint_state_size)
         checkpoint_state_mode = str(checkpoint.get("state_mode", "vector"))
+        if (
+            checkpoint_state_mode in ("grid", "hybrid")
+            and int(checkpoint.get("architecture_version", 1)) != 2
+        ):
+            raise ValueError(
+                "This Grid/Hybrid checkpoint predates the nine-channel dual-branch "
+                "architecture and cannot be loaded. Retrain with the current version."
+            )
         # 旧 Grid 权重曾拼接 4 维方向向量，与当前纯 CNN Grid 的全连接层形状不同。
         if checkpoint_state_mode == "grid" and "direction_size" in checkpoint:
             raise ValueError(

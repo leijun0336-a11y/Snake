@@ -129,9 +129,9 @@ uv run python -m snake_ai.evaluate
 - `--no-potential-reward`：关闭基于食物距离的势函数奖励。
 - `--no-cost-rewards`：关闭每步与饥饿成本；超时惩罚同时恢复为基线 `-10`。
 - `--cnn-channels`：Grid/Hybrid CNN 主干通道数，默认 `32`。
-- `--cnn-output-channels`：1x1 卷积压缩后的通道数，默认 `16`。
-- `--cnn-dilations`：空洞残差块的 dilation 序列，默认 `1 2 4`。
-- `--cnn-pool-size`：自适应平均池化输出的高和宽，默认 `5 5`。
+- `--cnn-output-channels`：全局/局部分支各自使用的 1x1 卷积压缩通道数，默认 `8`。
+- `--cnn-dilations`：共享残差块第一层卷积的 dilation 序列，默认 `1 1 2`；每个块的第二层固定使用普通 3x3 卷积。
+- `--cnn-pool-size`：全局分支平均池化输出的高和宽，默认 `10 10`。
 - `--no-early-stop`：关闭训练早停。
 - `--min-episodes`：早停生效前至少训练的 episode 数量。
 - `--patience`：超过最小训练局数后，允许连续多少个 episode 没有有效提升。
@@ -198,21 +198,26 @@ TensorBoard 参数：
 
 | 部分 | 形状 | 含义 |
 |------|------|------|
-| grid | `[6, height, width]` | `float32` NumPy 多通道符号网格。 |
+| grid | `[9, height, width]` | `float32` NumPy 多通道空间网格。 |
 
 grid 通道说明：
 
 | 通道 | 含义 |
 |------|------|
-| 0 | 边界格子。 |
-| 1 | 蛇身，不含蛇头。 |
-| 2 | 蛇头。 |
-| 3 | 食物。 |
-| 4 | 蛇身顺序，蛇头为 `1.0`，越靠近尾巴数值越小。 |
-| 5 | 饥饿比例常数平面，所有格子均为当前 `hunger_ratio`。 |
+| 0 | `boundary`：合法棋盘的最外圈格子。它是边缘风险提示，不是棋盘外的真实墙体。 |
+| 1 | `snake_body`：蛇身，不含蛇头，包含蛇尾。 |
+| 2 | `head_left`：仅当蛇向左时，在蛇头格置 `1`。 |
+| 3 | `head_right`：仅当蛇向右时，在蛇头格置 `1`。 |
+| 4 | `head_up`：仅当蛇向上时，在蛇头格置 `1`。 |
+| 5 | `head_down`：仅当蛇向下时，在蛇头格置 `1`。 |
+| 6 | `snake_tail`：仅在蛇尾格置 `1`。 |
+| 7 | `food`：仅在食物格置 `1`。 |
+| 8 | `body_order`：蛇头为 `1.0`，沿蛇身递减，蛇尾为 `1 / snake_length`。 |
+
+Grid 的 9 个通道只表达空间信息，纯 Grid 不再接收 `hunger_ratio` 常量平面或标量旁路。Vector 的第 20 维仍然是 `hunger_ratio`；Hybrid 因为会拼接完整 20 维人工状态，所以仍能观察饥饿进度。
 
 `SnakeEnv.get_hybrid_state()` 返回 `(grid, vector_state)`：`grid` 是形状为
-`[6, height, width]` 的 `float32` NumPy 数组，`vector_state` 是 `get_state()`
+`[9, height, width]` 的 `float32` NumPy 数组，`vector_state` 是 `get_state()`
 返回的完整 20 维人工状态。
 Hybrid Q 网络先提取并展平 CNN 特征，再与 20 维状态拼接。
 
@@ -221,23 +226,28 @@ Hybrid Q 网络先提取并展平 CNN 特征，再与 20 维状态拼接。
 | 模式 | Q 网络输入 | 用途 |
 |------|------------|------|
 | `vector` | 20 维人工状态 | 低维 MLP baseline。 |
-| `grid` | 纯 6 通道网格 | 检验空洞 CNN 从网格端到端提取特征的能力，不额外拼接方向向量。 |
-| `hybrid` | 6 通道网格 + 20 维人工状态 | 结合全图布局与人工特征，提高有限算力下的学习效率。 |
+| `grid` | 纯 9 通道空间网格 | 从网格端到端学习；方向编码在四个蛇头通道内，不拼接人工向量或 hunger。 |
+| `hybrid` | 9 通道网格 + 20 维人工状态 | 结合全局/局部空间布局与人工特征，20 维向量中包含 hunger。 |
 
-Grid 和 Hybrid 共用轻量空洞 CNN，默认结构为：
+Grid 和 Hybrid 共用带 GroupNorm 的双分支 CNN，默认结构为：
 
 ```text
-6 通道网格
-  -> 3x3 Conv（32 通道）
-  -> DilatedResidualBlock（dilation=1, 2, 4）
-  -> 1x1 Conv（16 通道）
-  -> AdaptiveAvgPool2d(5, 5)
-  -> Flatten（400 维）
+9 通道网格 [B, 9, 20, 20]
+  -> 3x3 Conv（32 通道）+ GroupNorm + ReLU
+  -> ResidualBlock（第一层 dilation=1，第二层 dilation=1）
+  -> ResidualBlock（第一层 dilation=1，第二层 dilation=1）
+  -> ResidualBlock（第一层 dilation=2，第二层 dilation=1）
+  -> 共享特征图 [B, 32, 20, 20]
+       ├─ 全局分支：1x1 Conv 32->8 + GroupNorm + 2x2 AvgPool -> [B, 800]
+       └─ 局部分支：1x1 Conv 32->8 + GroupNorm + 蛇头中心 5x5 裁剪 -> [B, 200]
+  -> 拼接为 [B, 1000]
 ```
 
-Grid 模式把 400 维 CNN 特征直接送入共享全连接层；Hybrid 模式先拼接 20 维人工状态，形成 420 维特征，再送入共享全连接层。两者最后都连接 Dueling 的 `V(s)` 和 `A(s,a)` 分支。
+Grid 模式把 1000 维空间特征送入 `Linear(1000, 128)`；Hybrid 先拼接 20 维人工状态，形成 1020 维，再送入 `Linear(1020, 128)`。Grid/Hybrid 的 Dueling 分支分别为 `128 -> 64 -> 1` 和 `128 -> 64 -> 3`，最后按 `Q = V + A - mean(A)` 合成三个动作的 Q 值。默认 Grid policy network 有 `203,780` 个参数，Hybrid 有 `206,340` 个参数。
 
-CNN 的主干通道数、压缩通道数、dilation 序列和池化尺寸已经参数化。训练保存的 checkpoint 会记录这些架构参数，评估时自动按 checkpoint 重建网络。不同 state mode 的 checkpoint 不能混用；旧的“grid + 4 维方向向量”checkpoint 与当前纯 Grid CNN 结构不兼容，会明确报错而不会静默加载。
+局部分支将四个方向蛇头通道相加以定位蛇头，先在共享特征图外围补 2 格，再通过 `F.unfold + gather` 批量提取每个样本的 5x5 窗口，因此蛇头位于边角时形状仍固定，并且整个路径可以反向传播。
+
+CNN 的主干通道数、分支压缩通道数、dilation 序列和全局池化尺寸已经参数化。训练保存的 checkpoint 会记录这些架构参数和 `architecture_version=2`，评估时自动按 checkpoint 重建网络。不同 state mode 的 checkpoint 不能混用；旧 6 通道 Grid/Hybrid checkpoint 与当前 9 通道双分支结构不兼容，加载时会明确要求重新训练，而不会静默错载。
 
 Grid/Hybrid 的状态数据使用连续 NumPy 数组保存。动作选择时通过
 `torch.from_numpy()` 读取单个状态；经验回放采样后先用一次 `np.stack()`

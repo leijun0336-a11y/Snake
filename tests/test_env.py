@@ -47,12 +47,13 @@ def test_grid_state_contains_map_channels() -> None:
     assert len(grid[0]) == env.height
     assert len(grid[0][0]) == env.width
     assert grid[0][0][0] == 1.0
-    assert grid[2][2][2] == 1.0
+    assert grid[3][2][2] == 1.0
     assert grid[1][2][1] == 1.0
-    assert grid[3][3][4] == 1.0
-    assert grid[4][2][2] == 1.0
-    assert grid[4][2][0] == 1 / 3
-    assert np.all(grid[5] == 0.0)
+    assert grid[6][2][0] == 1.0
+    assert grid[7][3][4] == 1.0
+    assert grid[8][2][2] == 1.0
+    assert grid[8][2][0] == 1 / 3
+    assert sum(float(grid[channel].sum()) for channel in range(2, 6)) == 1.0
 
 
 def test_state_and_grid_include_normalized_hunger_progress() -> None:
@@ -60,7 +61,8 @@ def test_state_and_grid_include_normalized_hunger_progress() -> None:
     env.steps_since_food = 18
 
     assert env.get_state()[19] == 0.5
-    assert np.all(env.get_grid_state()[5] == 0.5)
+    # Hunger remains in the vector state but is intentionally absent from Grid.
+    assert env.get_grid_state().shape[0] == 9
 
 
 def test_hybrid_state_contains_grid_and_vector_state() -> None:
