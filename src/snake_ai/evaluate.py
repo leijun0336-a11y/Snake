@@ -193,6 +193,13 @@ def main() -> None:
     steps: list[int] = []
     max_lengths: list[int] = []
     score_per_steps: list[float] = []
+    # 累计和用于绘制稳定的 running mean；第 N 个点表示前 N 局的真实平均值。
+    running_totals = {
+        "score": 0.0,
+        "steps": 0.0,
+        "score_per_step": 0.0,
+        "max_snake_length": 0.0,
+    }
     csv_file = None
     eval_start_time = time.perf_counter()
     try:
@@ -236,6 +243,10 @@ def main() -> None:
             # 吃食效率 = 吃到的食物数 / 存活步数
             score_per_step = score / episode_steps if episode_steps > 0 else 0.0
             score_per_steps.append(score_per_step)
+            running_totals["score"] += score
+            running_totals["steps"] += episode_steps
+            running_totals["score_per_step"] += score_per_step
+            running_totals["max_snake_length"] += max_snake_length
 
             # 每个episode输出一次信息。
             print(
@@ -253,6 +264,13 @@ def main() -> None:
                 writer.add_scalar("eval/score_per_step", score_per_step, episode)
                 # 本局最大蛇身长度
                 writer.add_scalar("eval/max_snake_length", max_snake_length, episode)
+                # 累计均值比独立 episode 折线稳定，最后一点等于本次评估总体均值。
+                for metric_name, total in running_totals.items():
+                    writer.add_scalar(
+                        f"eval_running_mean/{metric_name}",
+                        total / episode,
+                        episode,
+                    )
 
             if csv_path is not None:
                 metrics.writerow(

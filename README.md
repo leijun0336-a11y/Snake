@@ -279,6 +279,10 @@ Grid/Hybrid 的状态数据使用连续 NumPy 数组保存。动作选择时通�
 | 单局步数 | `eval/steps` | `steps` | 当前评估 episode 的存活步数。 |
 | 吃食效率 | `eval/score_per_step` | `score_per_step` | `score / steps`。 |
 | 最大蛇身长度 | `eval/max_snake_length` | `max_snake_length` | 当前评估 episode 中蛇身达到过的最大长度。 |
+| 累计平均得分 | `eval_running_mean/score` | 无 | 从第 1 局到当前局的 `score` 真实平均值。 |
+| 累计平均步数 | `eval_running_mean/steps` | 无 | 从第 1 局到当前局的 `steps` 真实平均值。 |
+| 累计平均吃食效率 | `eval_running_mean/score_per_step` | 无 | 从第 1 局到当前局的 `score_per_step` 真实平均值。 |
+| 累计平均最大蛇长 | `eval_running_mean/max_snake_length` | 无 | 从第 1 局到当前局的 `max_snake_length` 真实平均值。 |
 | 评估摘要 | `eval/report` | 无 | Text 页中的汇总表，包含均值、标准差、最小值和最大值。 |
 
 ## TensorBoard
@@ -299,6 +303,8 @@ http://localhost:6006
 
 - `.train` 后缀：训练指标，例如 `train/score`、`train/episode_reward`、`train/loss`、`train/mean_score_100`
 - `.eval` 后缀：评估指标，例如 `eval/score`、`eval/steps`、`eval/score_per_step`、`eval/max_snake_length`
+
+评估还会生成 `eval_running_mean` 分组。该分组中的四张累计均值图用于主要模型对比；曲线最后一个点严格等于本次全部评估 episode 的总体均值，不受 TensorBoard `Smoothing` 设置影响。
 
 ## 可复现性
 

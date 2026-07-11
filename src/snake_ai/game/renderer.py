@@ -31,8 +31,9 @@ class SnakeRenderer:
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         # 创建时钟对象，用于控制 fps。
         self.clock = pygame.time.Clock()
-        # 创建字体对象，用于绘制分数文本。两个传入参数分别是字体名称和字体大小。
-        self.font = pygame.font.SysFont("arial", 24)
+        # 使用 pygame 内置默认字体，避免 SysFont 扫描 Windows 字体注册表时因异常的
+        # 非字符串字体项触发 TypeError；None 表示不依赖本机安装的系统字体。
+        self.font = pygame.font.Font(None, 24)
 
     # 根据当前蛇、食物和分数刷新一帧画面。
     def render(self, snake: list[Point], food: Point, score: int) -> None:
