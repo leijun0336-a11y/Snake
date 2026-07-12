@@ -18,6 +18,7 @@ class EnvConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     episodes: int = 15000
+    max_steps_per_episode: int = 500
     batch_size: int = 128
     gamma: float = 0.99
     learning_rate: float = 1e-3

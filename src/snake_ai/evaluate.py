@@ -29,7 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a trained Snake DQN agent.")
     # 不传时默认加载 checkpoints/<最新 dqn_*>/best.pt；显式传入时使用用户指定路径。
     parser.add_argument("--checkpoint", type=Path, default=None)
-    parser.add_argument("--episodes", type=int, default=200)
+    parser.add_argument("--episodes", type=int, default=1000)
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=1000,
+        help="Maximum total steps per evaluation episode (default: 1000).",
+    )
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
@@ -127,6 +133,8 @@ def main() -> None:
     args = parse_args()
     if args.episodes < 1:
         raise ValueError("episodes must be at least 1")
+    if args.max_steps < 1:
+        raise ValueError("max_steps must be at least 1")
     if args.width < 4 or args.height < 4:
         raise ValueError("width and height must be at least 4")
     if args.cell_size < 1 or args.fps < 1:
@@ -175,6 +183,8 @@ def main() -> None:
         cell_size=env_config.cell_size,
         fps=env_config.fps,
         seed=train_config.seed,
+        # 对齐 chynl/snake 的 benchmark：评估时不使用逐食物 starvation。
+        starvation_enabled=False,
         # 与训练保持一致，由环境直接返回 checkpoint 所需模式的 observation。
         state_mode=state_mode,
     )
@@ -238,11 +248,13 @@ def main() -> None:
             info = {"score": 0}
             # 每局开始时蛇身长度为3(初始值)，后续吃到食物会增长
             max_snake_length = len(env.snake)
+            evaluation_steps = 0
 
             # 评估时只进行动作采样和环境反馈。
-            while not done:
+            while not done and evaluation_steps < args.max_steps:
                 action = agent.act(state, training=False)
                 state, _, done, info = env.step(action)
+                evaluation_steps += 1
                 # 每步记录蛇身长度，追踪本局峰值
                 current_length = int(info["snake_length"])
                 if current_length > max_snake_length:

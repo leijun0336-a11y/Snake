@@ -22,10 +22,14 @@ except ImportError:
 # 解析启动脚本时的命令行参数
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a DQN agent for Snake.")
-    # 兼容旧参数；如果传入 --episodes，它会覆盖 --max-episodes。
-    parser.add_argument("--episodes", type=int, default=None)
     # 最大训练局数；早停没有触发时，训练最多跑到这个 episode。
     parser.add_argument("--max-episodes", type=int, default=TrainConfig.episodes)
+    parser.add_argument(
+        "--max-steps-per-episode",
+        type=int,
+        default=TrainConfig.max_steps_per_episode,
+        help="Maximum environment steps per training episode (default: 500).",
+    )
     # 是否带渲染训练, action="store_true"表示：启动脚本时写上--render则为True，不写默认为False
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
@@ -38,9 +42,9 @@ def parse_args() -> argparse.Namespace:
         "--state-mode", choices=("vector", "grid", "hybrid"), default="vector"
     )
     parser.add_argument(
-        "--no-potential-reward",
+        "--potential-reward",
         action="store_true",
-        help="Disable potential-based food progress shaping.",
+        help="Enable potential-based food progress shaping (disabled by default).",
     )
     parser.add_argument(
         "--no-cost-rewards",
@@ -64,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         default=TrainConfig.epsilon_decay_episodes,
         help=(
             "Linearly decay epsilon to epsilon-end over this many episodes. "
-            "Defaults to 70% of the current max episodes. Set to 0 to use exponential "
+            "Defaults to 50%% of the current max episodes. Set to 0 to use exponential "
             "epsilon-decay instead."
         ),
     )
@@ -86,8 +90,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cnn-pool-size", type=int, nargs=2, default=TrainConfig.cnn_pool_size
     )
-    # 关闭早停后会严格跑满最大训练局数。
-    parser.add_argument("--no-early-stop", action="store_true")
+    # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
+    parser.add_argument(
+        "--early-stop",
+        action="store_true",
+        help="Enable patience/target based early stopping (disabled by default).",
+    )
     # 至少训练多少局后，才允许早停判断生效。
     parser.add_argument("--min-episodes", type=int, default=5000)
     # 超过最小训练局数后，允许连续多少局没有有效提升。
@@ -111,7 +119,7 @@ def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
 
 
 def print_stop_overview(args: argparse.Namespace, max_episodes: int) -> None:
-    early_stop_enabled = not args.no_early_stop
+    early_stop_enabled = args.early_stop
     patience_earliest_episode = max(args.min_episodes, args.patience + 1)
     target_earliest_episode = 100 if args.target_mean_score is not None else None
     earliest_candidates = [patience_earliest_episode]
@@ -205,10 +213,11 @@ def format_train_report(
 
 def main() -> None:
     args = parse_args()
-    # --episodes 是旧参数别名；新语义下优先使用 --max-episodes 表示训练上限。
-    max_episodes = args.episodes if args.episodes is not None else args.max_episodes
+    max_episodes = args.max_episodes
     if max_episodes < 1:
         raise ValueError("max episodes must be at least 1")
+    if args.max_steps_per_episode < 1:
+        raise ValueError("max_steps_per_episode must be at least 1")
     if args.width < 4 or args.height < 4:
         raise ValueError("width and height must be at least 4")
     if args.cell_size < 1 or args.fps < 1:
@@ -226,7 +235,7 @@ def main() -> None:
     if args.epsilon_decay_episodes is not None and args.epsilon_decay_episodes < 0:
         raise ValueError("epsilon_decay_episodes must be non-negative")
     epsilon_decay_episodes = (
-        max(1, int(max_episodes * 0.7))
+        max(1, int(max_episodes * 0.5))
         if args.epsilon_decay_episodes is None
         else args.epsilon_decay_episodes
     )
@@ -245,6 +254,7 @@ def main() -> None:
 
     train_config = TrainConfig(
         episodes=max_episodes,
+        max_steps_per_episode=args.max_steps_per_episode,
         batch_size=args.batch_size,
         gamma=args.gamma,
         learning_rate=args.learning_rate,
@@ -306,7 +316,7 @@ def main() -> None:
         seed=train_config.seed,
         # 环境直接在 reset()/step() 中返回对应 observation，避免训练循环重复构造状态。
         state_mode=args.state_mode,
-        potential_reward=not args.no_potential_reward,
+        potential_reward=args.potential_reward,
         cost_rewards=not args.no_cost_rewards,
         reward_gamma=train_config.gamma,
     )
@@ -423,7 +433,10 @@ def main() -> None:
                 }
 
                 # 一次episode训练
-                while not done:
+                while (
+                    not done
+                    and env.frame_iteration < train_config.max_steps_per_episode
+                ):
                     # 训练时的动作采样
                     action = agent.act(state, training=True)
                     # 环境反馈，info是环境额外返回的信息字典，不直接参与DQN更新
@@ -440,7 +453,7 @@ def main() -> None:
                         losses.append(loss)
                     state = next_state
 
-                # 每个episode执行一次epsilon衰减；默认按本次最大训练局数的70%线性退火。
+                # 每个 episode 执行一次 epsilon 衰减；默认按最大训练局数的 50% 线性退火。
                 agent.decay_epsilon(episode)
                 # 从环境返回的额外信息info中提取游戏分数字段的值
                 score = int(info["score"])
@@ -549,7 +562,7 @@ def main() -> None:
                 )
 
                 # early_stop_enabled 统一控制下面两种早停条件是否生效。
-                early_stop_enabled = not args.no_early_stop
+                early_stop_enabled = args.early_stop
                 # 达到目标 mean_score_100 后停止；至少等 100 局，避免前期均值窗口太短。
                 reached_target = (
                     args.target_mean_score is not None

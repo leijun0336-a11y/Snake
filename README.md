@@ -82,20 +82,20 @@ uv run python -m snake_ai.train --state-mode hybrid
 
 训练日志会记录 `score`、`mean_score_100`、总奖励、各奖励分量、终止原因、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。其中 `loss` 是 Huber loss。
 
-环境默认启用完整奖励设计：吃食物 `+10`、碰撞 `-10`、超时 `-12`、填满地图额外 `+20`、基于曼哈顿距离的势函数奖励、每步 `-0.005` 时间成本和二次增长的饥饿成本。两个奖励组可以独立关闭：
+环境默认使用与 `chynl/snake` 一致的奖励：吃食物 `+10`、碰撞 `-100`、超时 `-100`、填满地图的最后一步总奖励 `+100`；仍存活但没有吃到食物的普通移动奖励为 `-0.01`。基于曼哈顿距离的势函数奖励默认关闭，饥饿成本默认也为 `0`。势函数奖励可以显式启用，普通移动成本可以独立关闭：
 
 ```bash
-# 关闭势函数，只保留事件奖励与时间/饥饿成本
-uv run python -m snake_ai.train --no-potential-reward
+# 启用势函数奖励
+uv run python -m snake_ai.train --potential-reward
 
-# 关闭时间/饥饿成本，只保留事件奖励与势函数
+# 关闭普通移动成本，只保留事件奖励
 uv run python -m snake_ai.train --no-cost-rewards
 
-# 同时关闭，恢复 +10/-10/0 的事件奖励基线
-uv run python -m snake_ai.train --no-potential-reward --no-cost-rewards
+# 启用势函数，同时关闭普通移动成本
+uv run python -m snake_ai.train --potential-reward --no-cost-rewards
 ```
 
-训练默认启用早停策略。默认最多训练 `--max-episodes=5000` 局，早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes=1000` 局；之后如果连续 `--patience=500` 局没有超过 `--min-delta=0.5` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止。
+训练默认不启用早停，会运行到 `--max-episodes` 指定的最大局数。显式传入 `--early-stop` 后，早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes` 指定的局数；之后如果连续 `--patience` 局没有超过 `--min-delta` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止，但该条件同样只在传入 `--early-stop` 后生效。
 
 ## 评估
 
@@ -119,20 +119,20 @@ uv run python -m snake_ai.evaluate
 训练参数：
 
 - `--max-episodes`：最大训练 episode 数量；早停没有触发时，训练达到该上限后结束。
-- `--episodes`：兼容旧用法，等价于覆盖 `--max-episodes`。
+- `--max-steps-per-episode`：每个训练 episode 的环境总步数上限，默认 `500`；达到上限时直接截断，不伪造 terminal transition。
 - `--render`：训练时打开 pygame 渲染窗口。
 - `--width`：游戏网格宽度。
 - `--height`：游戏网格高度。
 - `--checkpoint-dir`：checkpoint 输出目录。
 - `--runs-dir`：训练日志输出目录。
 - `--state-mode`：状态输入模式，可选 `vector`、`grid`、`hybrid`；默认 `vector`。
-- `--no-potential-reward`：关闭基于食物距离的势函数奖励。
-- `--no-cost-rewards`：关闭每步与饥饿成本；超时惩罚同时恢复为基线 `-10`。
+- `--potential-reward`：启用基于食物距离的势函数奖励；默认关闭。
+- `--no-cost-rewards`：关闭普通移动与饥饿成本；超时仍使用与碰撞相同的 `-100` 终止惩罚。
 - `--cnn-channels`：Grid/Hybrid CNN 主干通道数，默认 `32`。
 - `--cnn-output-channels`：全局/局部分支各自使用的 1x1 卷积压缩通道数，默认 `8`。
 - `--cnn-dilations`：共享残差块第一层卷积的 dilation 序列，默认 `1 1 2`；每个块的第二层固定使用普通 3x3 卷积。
 - `--cnn-pool-size`：全局分支平均池化输出的高和宽，默认 `10 10`。
-- `--no-early-stop`：关闭训练早停。
+- `--early-stop`：启用训练早停；默认关闭。
 - `--min-episodes`：早停生效前至少训练的 episode 数量。
 - `--patience`：超过最小训练局数后，允许连续多少个 episode 没有有效提升。
 - `--min-delta`：`mean_score_100` 至少提升多少才算一次有效提升。
@@ -141,7 +141,8 @@ uv run python -m snake_ai.evaluate
 评估参数：
 
 - `--checkpoint`：指定要加载的 checkpoint。
-- `--episodes`：评估 episode 数量。
+- `--episodes`：评估 episode 数量，默认 `1000`。
+- `--max-steps`：每个评估 episode 的总步数上限，默认 `1000`；评估时不启用逐食物 starvation，以对齐 `chynl/snake` benchmark。
 - `--no-render`：评估时不打开 pygame 渲染窗口。
 - `--width`：游戏网格宽度。
 - `--height`：游戏网格高度。
@@ -192,7 +193,7 @@ TensorBoard 参数：
 | 17 | `body_distance_straight` | 直行方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 | 18 | `body_distance_right` | 右转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
 | 19 | `body_distance_left` | 左转方向最近身体的归一化距离；没有身体时为 `1.0`。 |
-| 20 | `hunger_ratio` | `steps_since_food / (width * height)`，截断到 `[0, 1]`。 |
+| 20 | `hunger_ratio` | `steps_since_food / (width * height + snake_length)`，截断到 `[0, 1]`；评估关闭 starvation 时固定为 `0`。 |
 
 `SnakeEnv.get_grid_state()` 返回纯多通道网格状态，作为 Grid CNN Q 网络输入：
 

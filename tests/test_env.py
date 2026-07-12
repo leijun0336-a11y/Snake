@@ -60,7 +60,7 @@ def test_state_and_grid_include_normalized_hunger_progress() -> None:
     env = SnakeEnv(width=6, height=6, seed=1)
     env.steps_since_food = 18
 
-    assert env.get_state()[19] == 0.5
+    assert env.get_state()[19] == pytest.approx(18 / 39)
     # Hunger remains in the vector state but is intentionally absent from Grid.
     assert env.get_grid_state().shape[0] == 9
 
@@ -139,7 +139,7 @@ def test_wall_collision_ends_episode() -> None:
     _, reward, done, _ = env.step(0)
 
     assert done is True
-    assert reward == -10.0
+    assert reward == -100.0
 
 def test_can_move_into_current_tail_when_not_eating() -> None:
     env = SnakeEnv(
@@ -170,7 +170,13 @@ def test_current_tail_is_collision_when_tail_will_not_move() -> None:
 
 
 def test_potential_reward_is_positive_when_moving_closer_to_food() -> None:
-    env = SnakeEnv(width=6, height=6, seed=1, cost_rewards=False)
+    env = SnakeEnv(
+        width=6,
+        height=6,
+        seed=1,
+        potential_reward=True,
+        cost_rewards=False,
+    )
     env.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
     env.direction = Direction.RIGHT
     env.food = Point(5, 2)
@@ -184,8 +190,14 @@ def test_potential_reward_is_positive_when_moving_closer_to_food() -> None:
     assert info["reward_hunger"] == 0.0
 
 
-def test_cost_rewards_apply_step_and_quadratic_hunger_penalties() -> None:
-    env = SnakeEnv(width=6, height=6, seed=1, potential_reward=False)
+def test_cost_rewards_apply_step_and_optional_quadratic_hunger_penalties() -> None:
+    env = SnakeEnv(
+        width=6,
+        height=6,
+        seed=1,
+        potential_reward=False,
+        hunger_penalty_scale=0.02,
+    )
     env.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
     env.direction = Direction.RIGHT
     env.food = Point(5, 5)
@@ -193,12 +205,12 @@ def test_cost_rewards_apply_step_and_quadratic_hunger_penalties() -> None:
 
     _, reward, done, info = env.step(0)
 
-    expected_hunger = -0.02 * (18 / 36) ** 2
+    expected_hunger = -0.02 * (18 / 39) ** 2
     assert done is False
     assert info["reward_progress"] == 0.0
-    assert info["reward_step"] == pytest.approx(-0.005)
+    assert info["reward_step"] == pytest.approx(-0.01)
     assert info["reward_hunger"] == pytest.approx(expected_hunger)
-    assert reward == pytest.approx(-0.005 + expected_hunger)
+    assert reward == pytest.approx(-0.01 + expected_hunger)
 
 
 def test_disabling_both_reward_groups_restores_event_only_baseline() -> None:
@@ -225,7 +237,7 @@ def test_disabling_both_reward_groups_restores_event_only_baseline() -> None:
 
 @pytest.mark.parametrize(
     ("cost_rewards", "expected_terminal"),
-    [(True, -12.0), (False, -10.0)],
+    [(True, -100.0), (False, -100.0)],
 )
 def test_starvation_penalty_respects_cost_reward_switch(
     cost_rewards: bool, expected_terminal: float
@@ -247,10 +259,40 @@ def test_starvation_penalty_respects_cost_reward_switch(
     assert done is True
     assert info["termination_reason"] == "starvation"
     assert info["reward_terminal"] == expected_terminal
-    if cost_rewards:
-        assert reward < expected_terminal
-    else:
-        assert reward == expected_terminal
+    assert reward == expected_terminal
+    assert info["reward_step"] == 0.0
+    assert info["reward_hunger"] == 0.0
+
+
+def test_starvation_limit_includes_current_snake_length() -> None:
+    env = SnakeEnv(width=6, height=6, seed=1)
+
+    assert len(env.snake) == 3
+    assert env.starvation_limit == 39
+
+    env.snake.append(Point(0, 0))
+
+    assert env.starvation_limit == 40
+
+
+def test_starvation_can_be_disabled_for_reference_evaluation() -> None:
+    env = SnakeEnv(
+        width=6,
+        height=6,
+        seed=1,
+        starvation_enabled=False,
+        potential_reward=False,
+    )
+    env.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
+    env.direction = Direction.RIGHT
+    env.food = Point(5, 5)
+    env.steps_since_food = env.starvation_limit
+
+    _, _, done, info = env.step(0)
+
+    assert done is False
+    assert info["termination_reason"] == "none"
+    assert env.hunger_ratio == 0.0
 
 
 def test_eating_food_reports_components_and_resets_hunger() -> None:
@@ -269,11 +311,11 @@ def test_eating_food_reports_components_and_resets_hunger() -> None:
     assert reward == pytest.approx(
         float(info["reward_food"])
         + float(info["reward_progress"])
-        + float(info["reward_step"])
     )
+    assert info["reward_step"] == 0.0
 
 
-def test_completing_board_adds_win_reward() -> None:
+def test_completing_board_has_total_reward_of_one_hundred() -> None:
     env = SnakeEnv(width=5, height=5, seed=1, potential_reward=False)
     food = Point(4, 4)
     head = Point(3, 4)
@@ -292,6 +334,7 @@ def test_completing_board_adds_win_reward() -> None:
     assert len(env.snake) == 25
     assert info["termination_reason"] == "board_completed"
     assert info["reward_food"] == 10.0
-    assert info["reward_terminal"] == 20.0
-    assert reward == pytest.approx(10.0 + 20.0 - 0.005)
+    assert info["reward_terminal"] == 90.0
+    assert info["reward_step"] == 0.0
+    assert reward == pytest.approx(100.0)
 

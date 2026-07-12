@@ -49,16 +49,17 @@ class SnakeEnv:
         fps: int = 30,
         seed: int | None = None,
         state_mode: str = "vector",
-        potential_reward: bool = True,
+        starvation_enabled: bool = True,
+        potential_reward: bool = False,
         cost_rewards: bool = True,
         reward_gamma: float = 0.99,
         progress_beta: float = 2.0,
         food_reward: float = 10.0,
         collision_penalty: float = -100.0,
-        starvation_penalty: float = -12.0,
-        win_reward: float = 20.0,
-        step_penalty: float = -0.005,
-        hunger_penalty_scale: float = 0.02,
+        starvation_penalty: float = -100.0,
+        win_reward: float = 90.0,
+        step_penalty: float = -0.01,
+        hunger_penalty_scale: float = 0.0,
     ) -> None:
         if width < 5 or height < 5:
             raise ValueError("width and height must both be at least 5")
@@ -78,6 +79,7 @@ class SnakeEnv:
         self.fps = fps
         # reset()/step() 根据该模式直接返回所需 observation，避免训练循环重复计算状态。
         self.state_mode = state_mode
+        self.starvation_enabled = starvation_enabled
         self.potential_reward = potential_reward
         self.cost_rewards = cost_rewards
         self.reward_gamma = reward_gamma
@@ -168,12 +170,13 @@ class SnakeEnv:
                 self.reward_gamma * new_phi - old_phi
             )
 
-        if self.cost_rewards:
+        # The reference reward assigns the time cost only to a normal move that
+        # remains alive and does not consume food.
+        if self.cost_rewards and not ate_food:
             self.last_reward_components["step"] = self.step_penalty
-            if not ate_food:
-                self.last_reward_components["hunger"] = (
-                    -self.hunger_penalty_scale * self.hunger_ratio**2
-                )
+            self.last_reward_components["hunger"] = (
+                -self.hunger_penalty_scale * self.hunger_ratio**2
+            )
 
         done = False
         if ate_food and len(self.snake) == self.width * self.height:
@@ -184,6 +187,9 @@ class SnakeEnv:
             self._place_food()
         elif self._is_too_long_without_food():
             # 关闭成本奖励后，超时也恢复为与碰撞相同的基线终止惩罚。
+            # A terminal timeout reward replaces the normal per-step costs.
+            self.last_reward_components["step"] = 0.0
+            self.last_reward_components["hunger"] = 0.0
             self.last_reward_components["terminal"] = (
                 self.starvation_penalty if self.cost_rewards else self.collision_penalty
             )
@@ -333,10 +339,12 @@ class SnakeEnv:
 
     @property
     def starvation_limit(self) -> int:
-        return self.width * self.height
+        return self.width * self.height + len(self.snake)
 
     @property
     def hunger_ratio(self) -> float:
+        if not self.starvation_enabled:
+            return 0.0
         return min(self.steps_since_food / self.starvation_limit, 1.0)
 
     def _get_info(self) -> dict[str, InfoValue]:
@@ -472,4 +480,7 @@ class SnakeEnv:
 
     # 用于判断蛇是不是太久没有吃到食物了
     def _is_too_long_without_food(self) -> bool:
-        return self.steps_since_food > self.starvation_limit
+        return (
+            self.starvation_enabled
+            and self.steps_since_food > self.starvation_limit
+        )
