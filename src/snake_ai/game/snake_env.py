@@ -54,7 +54,7 @@ class SnakeEnv:
         reward_gamma: float = 0.99,
         progress_beta: float = 2.0,
         food_reward: float = 10.0,
-        collision_penalty: float = -10.0,
+        collision_penalty: float = -100.0,
         starvation_penalty: float = -12.0,
         win_reward: float = 20.0,
         step_penalty: float = -0.005,

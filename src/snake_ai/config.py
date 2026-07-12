@@ -25,6 +25,7 @@ class TrainConfig:
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
     epsilon_decay: float = 0.995
+    epsilon_decay_episodes: int | None = None
     target_update_interval: int = 1000
     hidden_size: int = 256
     cnn_channels: int = 32

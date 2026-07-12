@@ -34,8 +34,10 @@ class DQNAgent:
         epsilon_start: float = 1.0,
         # 最低探索率，防止后期完全不探索。
         epsilon_end: float = 0.01,
-        # 每局结束后 epsilon 的衰减系数。
+        # 每局结束后 epsilon 的指数衰减系数；未启用线性衰减时使用。
         epsilon_decay: float = 0.995,
+        # 线性衰减到 epsilon_end 需要的 episode 数；None 时保留指数衰减。
+        epsilon_decay_episodes: int | None = None,
         # 每隔多少次学习步骤，把 policy_net 的参数复制一份给 target_net.
         target_update_interval: int = 1000,
         # 是否使用 Dueling DQN 架构，分离状态值和优势值。
@@ -69,9 +71,11 @@ class DQNAgent:
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
+        self.epsilon_start = epsilon_start
         self.epsilon = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
+        self.epsilon_decay_episodes = epsilon_decay_episodes
         self.target_update_interval = target_update_interval
         self.dueling = dueling
         self.learn_steps = 0
@@ -180,7 +184,14 @@ class DQNAgent:
         return float(loss.item())
 
     # 逐渐减少随机探索，让智能体从“多尝试”过渡到“多利用已学到的策略”
-    def decay_epsilon(self) -> None:
+    def decay_epsilon(self, episode: int | None = None) -> None:
+        if self.epsilon_decay_episodes is not None and episode is not None:
+            progress = min(max(episode, 0) / self.epsilon_decay_episodes, 1.0)
+            epsilon_range = self.epsilon_start - self.epsilon_end
+            self.epsilon = max(
+                self.epsilon_end, self.epsilon_start - epsilon_range * progress
+            )
+            return
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
 
     # 更新目标网络
@@ -248,7 +259,11 @@ class DQNAgent:
                 # 用于计算 DQN 目标值的目标网络参数。
                 "target_net": self.target_net.state_dict(),
                 # 当前探索率，恢复训练时可以接着当前探索进度继续。
+                "epsilon_start": self.epsilon_start,
                 "epsilon": self.epsilon,
+                "epsilon_end": self.epsilon_end,
+                "epsilon_decay": self.epsilon_decay,
+                "epsilon_decay_episodes": self.epsilon_decay_episodes,
                 # 已完成的神经网络更新次数，用于恢复目标网络同步节奏。
                 "learn_steps": self.learn_steps,
                 # 状态向量维度，方便加载时检查环境和模型是否匹配。
@@ -369,5 +384,14 @@ class DQNAgent:
         # 正常加载权重到网络。
         self.policy_net.load_state_dict(policy_state)
         self.target_net.load_state_dict(checkpoint.get("target_net", policy_state))
+        self.epsilon_start = float(checkpoint.get("epsilon_start", self.epsilon_start))
         self.epsilon = float(checkpoint.get("epsilon", self.epsilon_end))
+        self.epsilon_end = float(checkpoint.get("epsilon_end", self.epsilon_end))
+        self.epsilon_decay = float(checkpoint.get("epsilon_decay", self.epsilon_decay))
+        checkpoint_decay_episodes = checkpoint.get(
+            "epsilon_decay_episodes", self.epsilon_decay_episodes
+        )
+        self.epsilon_decay_episodes = (
+            None if checkpoint_decay_episodes is None else int(checkpoint_decay_episodes)
+        )
         self.learn_steps = int(checkpoint.get("learn_steps", 0))

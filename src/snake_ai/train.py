@@ -59,6 +59,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epsilon-end", type=float, default=TrainConfig.epsilon_end)
     parser.add_argument("--epsilon-decay", type=float, default=TrainConfig.epsilon_decay)
     parser.add_argument(
+        "--epsilon-decay-episodes",
+        type=int,
+        default=TrainConfig.epsilon_decay_episodes,
+        help=(
+            "Linearly decay epsilon to epsilon-end over this many episodes. "
+            "Defaults to 70% of the current max episodes. Set to 0 to use exponential "
+            "epsilon-decay instead."
+        ),
+    )
+    parser.add_argument(
         "--target-update-interval",
         type=int,
         default=TrainConfig.target_update_interval,
@@ -213,6 +223,13 @@ def main() -> None:
         raise ValueError("epsilon values must satisfy 0 <= end <= start <= 1")
     if not 0.0 < args.epsilon_decay <= 1.0:
         raise ValueError("epsilon_decay must be in (0, 1]")
+    if args.epsilon_decay_episodes is not None and args.epsilon_decay_episodes < 0:
+        raise ValueError("epsilon_decay_episodes must be non-negative")
+    epsilon_decay_episodes = (
+        max(1, int(max_episodes * 0.7))
+        if args.epsilon_decay_episodes is None
+        else args.epsilon_decay_episodes
+    )
     if args.target_update_interval < 1 or args.hidden_size < 1:
         raise ValueError("target_update_interval and hidden_size must be positive")
     if args.min_episodes < 1:
@@ -235,6 +252,9 @@ def main() -> None:
         epsilon_start=args.epsilon_start,
         epsilon_end=args.epsilon_end,
         epsilon_decay=args.epsilon_decay,
+        epsilon_decay_episodes=(
+            None if epsilon_decay_episodes == 0 else epsilon_decay_episodes
+        ),
         target_update_interval=args.target_update_interval,
         hidden_size=args.hidden_size,
         cnn_channels=args.cnn_channels,
@@ -310,8 +330,10 @@ def main() -> None:
         epsilon_start=train_config.epsilon_start,  
         # epsilon值的下界
         epsilon_end=train_config.epsilon_end,  
-        # epsilon的衰减系数
-        epsilon_decay=train_config.epsilon_decay,  
+        # epsilon的指数衰减系数；线性衰减关闭时使用。
+        epsilon_decay=train_config.epsilon_decay,
+        # 线性衰减到 epsilon_end 需要的 episode 数。
+        epsilon_decay_episodes=train_config.epsilon_decay_episodes,
         # 隔多少步更新一次目标网络
         # Q训练网络更新一次视为一步，当经验池满后，则等价于贪吃蛇走一步
         target_update_interval=train_config.target_update_interval,   
@@ -418,8 +440,8 @@ def main() -> None:
                         losses.append(loss)
                     state = next_state
 
-                # 每个episode执行一次epsilon衰减
-                agent.decay_epsilon()
+                # 每个episode执行一次epsilon衰减；默认按本次最大训练局数的70%线性退火。
+                agent.decay_epsilon(episode)
                 # 从环境返回的额外信息info中提取游戏分数字段的值
                 score = int(info["score"])
                 # 记录游戏分数到列表中
