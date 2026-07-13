@@ -105,7 +105,7 @@ uv run python -m snake_ai.train --potential-reward --no-cost-rewards
 uv run python -m snake_ai.evaluate
 ```
 
-默认会加载最近一次训练目录中的 `checkpoints/<run_name>/best.pt`。
+默认会加载最近一次训练目录中的 `checkpoints/<run_name>/latest.pt`。如需评估其他权重，使用 `--checkpoint` 显式指定。
 
 评估产物默认绑定到被评估 checkpoint 对应的 `runs/<run_name>` 目录：
 

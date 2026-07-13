@@ -27,7 +27,7 @@ except ImportError:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate a trained Snake DQN agent.")
-    # 不传时默认加载 checkpoints/<最新 dqn_*>/best.pt；显式传入时使用用户指定路径。
+    # 不传时默认加载 checkpoints/<最新 dqn_*>/latest.pt；显式传入时使用用户指定路径。
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--episodes", type=int, default=1000)
     parser.add_argument(
@@ -60,19 +60,21 @@ def find_latest_run_dir(runs_dir: Path = RUNS_DIR) -> Path:
     return max(run_dirs, key=lambda path: path.name)
 
 
-def find_latest_best_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
-    # 新训练会保存到 checkpoints/dqn_YYYYMMDD_HHMMSS/best.pt，这里按目录名时间取最新模型。
+def find_latest_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
+    # 新训练会保存到 checkpoints/dqn_YYYYMMDD_HHMMSS/latest.pt，这里按目录名时间取最新模型。
     checkpoint_dirs = [path for path in checkpoint_dir.glob("dqn_*") if path.is_dir()]
     if not checkpoint_dirs:
-        legacy_checkpoint = checkpoint_dir / "best.pt"
+        legacy_checkpoint = checkpoint_dir / "latest.pt"
         if legacy_checkpoint.exists():
             return legacy_checkpoint
         raise FileNotFoundError(f"No checkpoint directory found in {checkpoint_dir}")
 
     latest_dir = max(checkpoint_dirs, key=lambda path: path.name)
-    latest_checkpoint = latest_dir / "best.pt"
+    latest_checkpoint = latest_dir / "latest.pt"
     if not latest_checkpoint.exists():
-        raise FileNotFoundError(f"No best.pt found in latest checkpoint directory {latest_dir}")
+        raise FileNotFoundError(
+            f"No latest.pt found in latest checkpoint directory {latest_dir}"
+        )
     return latest_checkpoint
 
 
@@ -148,8 +150,8 @@ def main() -> None:
         fps=args.fps,
     )
     
-    # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 best.pt。
-    checkpoint_path = args.checkpoint or find_latest_best_checkpoint()
+    # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 latest.pt。
+    checkpoint_path = args.checkpoint or find_latest_checkpoint()
     # 默认使用 checkpoint 记录的模式，避免手动选择错误的网络输入结构。
     state_mode = args.state_mode or get_checkpoint_state_mode(checkpoint_path)
 

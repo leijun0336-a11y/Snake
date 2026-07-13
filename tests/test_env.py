@@ -252,7 +252,7 @@ def test_starvation_penalty_respects_cost_reward_switch(
     env.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
     env.direction = Direction.RIGHT
     env.food = Point(5, 5)
-    env.steps_since_food = env.starvation_limit
+    env.steps_since_food = env.starvation_limit - 1
 
     _, reward, done, info = env.step(0)
 

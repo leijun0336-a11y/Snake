@@ -482,5 +482,5 @@ class SnakeEnv:
     def _is_too_long_without_food(self) -> bool:
         return (
             self.starvation_enabled
-            and self.steps_since_food > self.starvation_limit
+            and self.steps_since_food >= self.starvation_limit
         )
