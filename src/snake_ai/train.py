@@ -3,13 +3,22 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import statistics
+import sys
 import time
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from snake_ai.agents import DQNAgent
-from snake_ai.config import CHECKPOINT_DIR, RUNS_DIR, EnvConfig, TrainConfig
+from snake_ai.config import (
+    CHECKPOINT_DIR,
+    REWARD_PROFILE_NAMES,
+    RUNS_DIR,
+    EnvConfig,
+    TrainConfig,
+)
 from snake_ai.game import SnakeEnv
 from snake_ai.utils import set_seed
 
@@ -27,8 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-steps-per-episode",
         type=int,
-        default=TrainConfig.max_steps_per_episode,
-        help="Maximum environment steps per training episode (default: 500).",
+        default=None,
+        help=(
+            "Override the profile's training episode step limit. The reference "
+            "profile defaults to 500; experiment8 is intentionally unlimited."
+        ),
     )
     # 是否带渲染训练, action="store_true"表示：启动脚本时写上--render则为True，不写默认为False
     parser.add_argument("--render", action="store_true")
@@ -40,6 +52,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
     parser.add_argument(
         "--state-mode", choices=("vector", "grid", "hybrid"), default="vector"
+    )
+    parser.add_argument(
+        "--reward-profile",
+        choices=REWARD_PROFILE_NAMES,
+        default="reference",
+        help=(
+            "Named reward semantics. experiment8 exactly restores the historical "
+            "dqn_20260712_130642 reward and starvation behavior."
+        ),
     )
     parser.add_argument(
         "--potential-reward",
@@ -116,6 +137,36 @@ def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
         "max": float(max(values)),
         "last": float(values[-1]),
     }
+
+
+def resolve_max_steps_per_episode(args: argparse.Namespace) -> int | None:
+    """Validate profile invariants and resolve its training episode step limit."""
+
+    if args.max_steps_per_episode is not None and args.max_steps_per_episode < 1:
+        raise ValueError("max_steps_per_episode must be at least 1")
+    if args.reward_profile == "experiment8":
+        if args.potential_reward:
+            raise ValueError(
+                "experiment8 already enables potential reward; omit --potential-reward"
+            )
+        if args.no_cost_rewards:
+            raise ValueError(
+                "experiment8 requires its historical cost rewards; "
+                "--no-cost-rewards is incompatible"
+            )
+        if args.max_steps_per_episode is not None:
+            raise ValueError(
+                "experiment8 requires no independent training episode step limit; "
+                "omit --max-steps-per-episode"
+            )
+        if args.gamma != 0.99:
+            raise ValueError("experiment8 requires gamma=0.99 for its potential reward")
+        return None
+    return (
+        TrainConfig.max_steps_per_episode
+        if args.max_steps_per_episode is None
+        else args.max_steps_per_episode
+    )
 
 
 def print_stop_overview(args: argparse.Namespace, max_episodes: int) -> None:
@@ -216,8 +267,7 @@ def main() -> None:
     max_episodes = args.max_episodes
     if max_episodes < 1:
         raise ValueError("max episodes must be at least 1")
-    if args.max_steps_per_episode < 1:
-        raise ValueError("max_steps_per_episode must be at least 1")
+    max_steps_per_episode = resolve_max_steps_per_episode(args)
     if args.width < 4 or args.height < 4:
         raise ValueError("width and height must be at least 4")
     if args.cell_size < 1 or args.fps < 1:
@@ -254,7 +304,7 @@ def main() -> None:
 
     train_config = TrainConfig(
         episodes=max_episodes,
-        max_steps_per_episode=args.max_steps_per_episode,
+        max_steps_per_episode=max_steps_per_episode,
         batch_size=args.batch_size,
         gamma=args.gamma,
         learning_rate=args.learning_rate,
@@ -316,8 +366,9 @@ def main() -> None:
         seed=train_config.seed,
         # 环境直接在 reset()/step() 中返回对应 observation，避免训练循环重复构造状态。
         state_mode=args.state_mode,
-        potential_reward=args.potential_reward,
-        cost_rewards=not args.no_cost_rewards,
+        reward_profile=args.reward_profile,
+        potential_reward=True if args.potential_reward else None,
+        cost_rewards=False if args.no_cost_rewards else None,
         reward_gamma=train_config.gamma,
     )
     agent = DQNAgent(
@@ -355,6 +406,43 @@ def main() -> None:
         cnn_dilations=train_config.cnn_dilations,
         cnn_pool_size=train_config.cnn_pool_size,
         seed=train_config.seed,
+    )
+
+    # 同时写入 run/checkpoint 目录，并嵌入每个 checkpoint。以后不再依赖日志反推奖励。
+    run_config = {
+        "schema_version": 1,
+        "run_name": run_name,
+        "command_argv": [str(value) for value in sys.argv],
+        "environment": {
+            "width": env_config.width,
+            "height": env_config.height,
+            "cell_size": env_config.cell_size,
+            "fps": env_config.fps,
+            "state_mode": args.state_mode,
+            "starvation_enabled": env.starvation_enabled,
+        },
+        "reward": env.get_reward_settings(),
+        "training": asdict(train_config),
+        "early_stop": {
+            "enabled": args.early_stop,
+            "min_episodes": args.min_episodes,
+            "patience": args.patience,
+            "min_delta": args.min_delta,
+            "target_mean_score": args.target_mean_score,
+        },
+        "deterministic": args.deterministic,
+    }
+    config_text = json.dumps(run_config, ensure_ascii=False, indent=2) + "\n"
+    (run_dir / "config.json").write_text(config_text, encoding="utf-8")
+    (checkpoint_dir / "config.json").write_text(config_text, encoding="utf-8")
+    print(f"reward_profile={env.reward_profile}")
+    print(
+        "max_steps_per_episode="
+        + (
+            "unlimited"
+            if train_config.max_steps_per_episode is None
+            else str(train_config.max_steps_per_episode)
+        )
     )
 
     # 每局得分历史，用于计算 mean_score_100 和生成 train/report。
@@ -435,7 +523,10 @@ def main() -> None:
                 # 一次episode训练
                 while (
                     not done
-                    and env.frame_iteration < train_config.max_steps_per_episode
+                    and (
+                        train_config.max_steps_per_episode is None
+                        or env.frame_iteration < train_config.max_steps_per_episode
+                    )
                 ):
                     # 训练时的动作采样
                     action = agent.act(state, training=True)
@@ -489,7 +580,7 @@ def main() -> None:
                 # 保存最近 100 局平均分最高时的参数；不足 100 局时用已有局数的平均分。
                 if mean_score > best_mean_score:
                     best_mean_score = mean_score
-                    agent.save(checkpoint_dir / "best.pt")
+                    agent.save(checkpoint_dir / "best.pt", metadata=run_config)
 
                 # 早停使用 mean_score_100 判断收敛，不使用 reward，避免奖励塑形影响模型选择。
                 if mean_score > early_stop_best_mean_score + args.min_delta:
@@ -551,7 +642,7 @@ def main() -> None:
                 file.flush()
 
                 # 存下最近一次episode更新出来的参数
-                agent.save(checkpoint_dir / "latest.pt")
+                agent.save(checkpoint_dir / "latest.pt", metadata=run_config)
 
                 # 每个episode输出一次指标信息
                 print(

@@ -247,42 +247,46 @@ class DQNAgent:
         return torch.from_numpy(contiguous_array).to(self.device)
 
     # 把当前训练状态存到文件里
-    def save(self, path: str | Path) -> None:
+    def save(
+        self,
+        path: str | Path,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         path = Path(path)
         # 创建保存模型文件所在的文件夹
         # 如果父目录不存在，连带创建父母，如果当前目录已经存在也不要报错
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                # 正在训练和决策使用的 Q 网络参数。
-                "policy_net": self.policy_net.state_dict(),
-                # 用于计算 DQN 目标值的目标网络参数。
-                "target_net": self.target_net.state_dict(),
-                # 当前探索率，恢复训练时可以接着当前探索进度继续。
-                "epsilon_start": self.epsilon_start,
-                "epsilon": self.epsilon,
-                "epsilon_end": self.epsilon_end,
-                "epsilon_decay": self.epsilon_decay,
-                "epsilon_decay_episodes": self.epsilon_decay_episodes,
-                # 已完成的神经网络更新次数，用于恢复目标网络同步节奏。
-                "learn_steps": self.learn_steps,
-                # 状态向量维度，方便加载时检查环境和模型是否匹配。
-                "state_size": self.state_size,
-                "state_mode": self.state_mode,
-                # 保存完整 CNN 架构，评估自定义结构时才能准确重建网络。
-                "auxiliary_size": self.auxiliary_size,
-                "cnn_channels": self.cnn_channels,
-                "cnn_output_channels": self.cnn_output_channels,
-                "cnn_dilations": self.cnn_dilations,
-                "cnn_pool_size": self.cnn_pool_size,
-                # 动作数量，方便加载时检查环境和模型是否匹配。
-                "hidden_size": self.hidden_size,
-                "action_size": self.action_size,
-                "dueling": self.dueling,
-                "architecture_version": 2,
-            },
-            path,
-        )
+        checkpoint = {
+            # 正在训练和决策使用的 Q 网络参数。
+            "policy_net": self.policy_net.state_dict(),
+            # 用于计算 DQN 目标值的目标网络参数。
+            "target_net": self.target_net.state_dict(),
+            # 当前探索率，恢复训练时可以接着当前探索进度继续。
+            "epsilon_start": self.epsilon_start,
+            "epsilon": self.epsilon,
+            "epsilon_end": self.epsilon_end,
+            "epsilon_decay": self.epsilon_decay,
+            "epsilon_decay_episodes": self.epsilon_decay_episodes,
+            # 已完成的神经网络更新次数，用于恢复目标网络同步节奏。
+            "learn_steps": self.learn_steps,
+            # 状态向量维度，方便加载时检查环境和模型是否匹配。
+            "state_size": self.state_size,
+            "state_mode": self.state_mode,
+            # 保存完整 CNN 架构，评估自定义结构时才能准确重建网络。
+            "auxiliary_size": self.auxiliary_size,
+            "cnn_channels": self.cnn_channels,
+            "cnn_output_channels": self.cnn_output_channels,
+            "cnn_dilations": self.cnn_dilations,
+            "cnn_pool_size": self.cnn_pool_size,
+            # 动作数量，方便加载时检查环境和模型是否匹配。
+            "hidden_size": self.hidden_size,
+            "action_size": self.action_size,
+            "dueling": self.dueling,
+            "architecture_version": 2,
+        }
+        if metadata is not None:
+            checkpoint["run_config"] = metadata
+        torch.save(checkpoint, path)
 
     # 从文件里恢复模型状态
     def load(self, path: str | Path) -> None:

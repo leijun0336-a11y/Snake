@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import torch
 
 from snake_ai.agents.dqn_agent import DQNAgent
 
@@ -148,3 +149,17 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     assert loaded_agent.cnn_output_channels == 12
     assert loaded_agent.cnn_dilations == (1, 3)
     assert loaded_agent.cnn_pool_size == (4, 4)
+
+
+def test_save_embeds_resolved_run_config(tmp_path) -> None:
+    checkpoint_path = tmp_path / "configured.pt"
+    agent = DQNAgent(state_size=20, action_size=3, seed=1)
+    run_config = {
+        "reward": {"profile": "experiment8", "starvation_comparison": "gt"},
+        "training": {"max_steps_per_episode": None},
+    }
+
+    agent.save(checkpoint_path, metadata=run_config)
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    assert checkpoint["run_config"] == run_config

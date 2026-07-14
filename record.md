@@ -209,7 +209,13 @@ starvation limit = 36
 training episode max steps = unlimited
 ```
 
-当前 CLI 中 `--potential-reward` 可以重新开启 shaping，但其他旧奖励参数尚未全部暴露为命令行选项。因此，仅执行上述命令不能严格复现第八次实验。
+当前代码已新增不可变的 `experiment8` reward profile，恢复旧奖励数值、叠加顺序、固定棋盘面积 starvation、严格 `> limit` 的历史边界，以及无独立训练步数上限。AutoDL 严格配置复现使用：
+
+```bash
+bash scripts/train_experiment8_autodl.sh
+```
+
+该脚本不接受额外参数，避免无意覆盖历史配置。普通训练仍默认使用 `reference` profile，不会静默改变已经与对方对齐的基线。
 
 ## 8. 训练结果
 
@@ -272,14 +278,14 @@ epsilon = 0
 3. 将棋盘恢复为 6×6、状态恢复为 Hybrid、网络恢复为 architecture version 2。
 4. 将 epsilon 恢复为 15000 局训练、前 7500 局线性衰减、后 7500 局保持 0.01。
 5. 将奖励恢复为本文件第 5 节，而不是当前简化奖励。
-6. 将训练 starvation 恢复为固定 36 步。
+6. 将训练 starvation limit 恢复为固定 36，并使用历史条件 `steps_since_food > 36`；即第 37 个连续未吃食合法移动才终止。
 7. 移除当前每局 500 step 的训练截断。
 8. 继续使用 `latest.pt`，不要仅根据训练 mean_score_100 选择 `best.pt`。
 9. 用相同的 1000 局评估协议复测，目标基线是平均分 27.918、满分率 61.90%。
 
 ## 11. 建议的长期保护措施
 
-当前 checkpoint 没有保存 reward、starvation、seed、optimizer 和完整训练配置。为了避免再次依靠日志反推，后续应把以下字段写入 checkpoint：
+历史 checkpoint 没有保存 reward、starvation、seed、optimizer 和完整训练配置。当前新训练已经会在 run/checkpoint 目录写入 `config.json`，并把解析后的配置嵌入 checkpoint 的 `run_config` 字段；optimizer 与完整续训状态仍未保存。长期完整续训还应继续补充：
 
 ```text
 env_config

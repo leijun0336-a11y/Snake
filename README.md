@@ -95,6 +95,19 @@ uv run python -m snake_ai.train --no-cost-rewards
 uv run python -m snake_ai.train --potential-reward --no-cost-rewards
 ```
 
+奖励行为使用命名 profile 固定，避免再次靠源码默认值猜测历史配置：
+
+- `reference`：默认值，即上述与 `chynl/snake` 对齐的配置；训练 episode 默认最多 500 步。
+- `experiment8`：严格恢复 `dqn_20260712_130642` 的奖励、叠加顺序和 starvation 语义；自动开启 legacy potential，starvation 在超过固定棋盘面积后终止，且没有独立训练步数上限。
+
+在 AutoDL 上严格复现实验八的完整训练参数时，不要手工拼命令，直接运行不接受额外参数的固定脚本：
+
+```bash
+bash scripts/train_experiment8_autodl.sh
+```
+
+每个新 run 都会在 run 与 checkpoint 目录写入相同的 `config.json`，并把这份完整配置嵌入 `best.pt`/`latest.pt` 的 `run_config` 字段。
+
 训练默认不启用早停，会运行到 `--max-episodes` 指定的最大局数。显式传入 `--early-stop` 后，早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes` 指定的局数；之后如果连续 `--patience` 局没有超过 `--min-delta` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止，但该条件同样只在传入 `--early-stop` 后生效。
 
 ## 评估
@@ -119,13 +132,14 @@ uv run python -m snake_ai.evaluate
 训练参数：
 
 - `--max-episodes`：最大训练 episode 数量；早停没有触发时，训练达到该上限后结束。
-- `--max-steps-per-episode`：每个训练 episode 的环境总步数上限，默认 `500`；达到上限时直接截断，不伪造 terminal transition。
+- `--max-steps-per-episode`：覆盖 profile 的训练 episode 总步数上限；`reference` 默认 `500`，`experiment8` 为严格复现而禁止设置此参数并保持无限。
 - `--render`：训练时打开 pygame 渲染窗口。
 - `--width`：游戏网格宽度。
 - `--height`：游戏网格高度。
 - `--checkpoint-dir`：checkpoint 输出目录。
 - `--runs-dir`：训练日志输出目录。
 - `--state-mode`：状态输入模式，可选 `vector`、`grid`、`hybrid`；默认 `vector`。
+- `--reward-profile`：奖励与 starvation 行为，可选 `reference`、`experiment8`；默认 `reference`。
 - `--potential-reward`：启用基于食物距离的势函数奖励；默认关闭。
 - `--no-cost-rewards`：关闭普通移动与饥饿成本；超时仍使用与碰撞相同的 `-100` 终止惩罚。
 - `--cnn-channels`：Grid/Hybrid CNN 主干通道数，默认 `32`。
