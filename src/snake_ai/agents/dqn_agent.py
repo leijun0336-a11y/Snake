@@ -11,9 +11,13 @@ from torch import nn, optim
 
 from snake_ai.agents.replay_buffer import ReplayBuffer
 from snake_ai.models.q_network import QNetwork
+from snake_ai.models.q_network_old import QNetworkOld
 
 
 class DQNAgent:
+    ARCHITECTURE_VERSION = 3
+    NETWORK_TYPES = ("q_network", "q_network_old")
+
     def __init__(
         self,
         # 状态维度，如果是vector模式输入向量，CNN模式和hibrid模式都输入网格。
@@ -46,6 +50,8 @@ class DQNAgent:
         dueling: bool = True,
         # 状态输入模式：vector 使用人工低维状态，grid 使用多通道网格状态。
         state_mode: str = "vector",
+        # 网络实现；q_network_old 仅用于评估版本2历史checkpoint。
+        network_type: str = "q_network",
         # Hybrid 模式下与 CNN 特征拼接的人工状态维度。
         auxiliary_size: int = 20,
         # Grid/Hybrid CNN 主干通道数。
@@ -54,22 +60,24 @@ class DQNAgent:
         cnn_output_channels: int = 8,
         # 空洞残差块的 dilation 序列。
         cnn_dilations: tuple[int, ...] = (1, 1, 2),
-        # 自适应平均池化输出尺寸。
-        cnn_pool_size: tuple[int, int] = (10, 10),
         # 随机种子，用于让探索、采样和网络初始化尽量可复现。
         seed: int = 42,
         # 计算设备；不传时优先使用 cuda，否则使用 cpu。
         device: str | None = None,
     ) -> None:
+        if network_type not in self.NETWORK_TYPES:
+            choices = ", ".join(self.NETWORK_TYPES)
+            raise ValueError(f"network_type must be one of: {choices}")
         self.state_size = state_size
         self.action_size = action_size
         self.hidden_size = hidden_size
         self.state_mode = state_mode
+        self.network_type = network_type
         self.auxiliary_size = auxiliary_size
         self.cnn_channels = cnn_channels
         self.cnn_output_channels = cnn_output_channels
         self.cnn_dilations = tuple(cnn_dilations)
-        self.cnn_pool_size = tuple(cnn_pool_size)
+        self.old_cnn_pool_size = (10, 10)
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
@@ -132,6 +140,8 @@ class DQNAgent:
 
     # 更新动作函数
     def learn(self) -> float | None:  # 返回值是float或者None
+        if self.network_type == "q_network_old":
+            raise RuntimeError("q_network_old is evaluation-only and cannot be trained")
         
         # 如果经验回放池的样本数量还不足一个batch_size，不进行更新
         if len(self.replay_buffer) < self.batch_size:
@@ -203,19 +213,24 @@ class DQNAgent:
     def update_target_network(self) -> None:
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
-    def _build_network(self) -> QNetwork:
+    def _build_network(self) -> QNetwork | QNetworkOld:
         # Policy/Target 网络都通过此方法构建，确保它们使用完全相同的状态模式和 CNN 配置。
-        return QNetwork(
+        network_class = QNetworkOld if self.network_type == "q_network_old" else QNetwork
+        network_kwargs: dict[str, Any] = {
+            "dueling": self.dueling,
+            "state_mode": self.state_mode,
+            "auxiliary_size": self.auxiliary_size,
+            "cnn_channels": self.cnn_channels,
+            "cnn_output_channels": self.cnn_output_channels,
+            "cnn_dilations": self.cnn_dilations,
+        }
+        if self.network_type == "q_network_old":
+            network_kwargs["cnn_pool_size"] = self.old_cnn_pool_size
+        return network_class(
             self.state_size,
             self.hidden_size,
             self.action_size,
-            dueling=self.dueling,
-            state_mode=self.state_mode,
-            auxiliary_size=self.auxiliary_size,
-            cnn_channels=self.cnn_channels,
-            cnn_output_channels=self.cnn_output_channels,
-            cnn_dilations=self.cnn_dilations,
-            cnn_pool_size=self.cnn_pool_size,
+            **network_kwargs,
         ).to(self.device)
 
     def _state_batch_to_tensor(
@@ -257,6 +272,8 @@ class DQNAgent:
         path: str | Path,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        if self.network_type == "q_network_old":
+            raise RuntimeError("q_network_old is evaluation-only and cannot save checkpoints")
         path = Path(path)
         # 创建保存模型文件所在的文件夹
         # 如果父目录不存在，连带创建父母，如果当前目录已经存在也不要报错
@@ -283,12 +300,12 @@ class DQNAgent:
             "cnn_channels": self.cnn_channels,
             "cnn_output_channels": self.cnn_output_channels,
             "cnn_dilations": self.cnn_dilations,
-            "cnn_pool_size": self.cnn_pool_size,
             # 动作数量，方便加载时检查环境和模型是否匹配。
             "hidden_size": self.hidden_size,
             "action_size": self.action_size,
             "dueling": self.dueling,
-            "architecture_version": 2,
+            "network_type": self.network_type,
+            "architecture_version": self.ARCHITECTURE_VERSION,
         }
         if metadata is not None:
             checkpoint["run_config"] = metadata
@@ -307,10 +324,22 @@ class DQNAgent:
         if isinstance(checkpoint_state_size, list):
             checkpoint_state_size = tuple(checkpoint_state_size)
         checkpoint_state_mode = str(checkpoint.get("state_mode", "vector"))
-        if (
-            checkpoint_state_mode in ("grid", "hybrid")
-            and int(checkpoint.get("architecture_version", 1)) != 2
-        ):
+        if checkpoint_state_size != self.state_size:
+            raise ValueError(
+                f"Checkpoint state_size={checkpoint_state_size} does not match "
+                f"current agent state_size={self.state_size}. Retrain the model after "
+                "changing the environment state features."
+            )
+        if checkpoint_state_mode != self.state_mode:
+            raise ValueError(
+                f"Checkpoint state_mode={checkpoint_state_mode!r} does not match "
+                f"current agent state_mode={self.state_mode!r}."
+            )
+
+        checkpoint_architecture_version = int(checkpoint.get("architecture_version", 1))
+        if self.network_type == "q_network_old" and checkpoint_architecture_version != 2:
+            raise ValueError("q_network_old only supports architecture_version=2 checkpoints")
+        if checkpoint_state_mode in ("grid", "hybrid") and checkpoint_architecture_version not in (2, 3):
             raise ValueError(
                 "This Grid/Hybrid checkpoint predates the nine-channel dual-branch "
                 "architecture and cannot be loaded. Retrain with the current version."
@@ -325,15 +354,16 @@ class DQNAgent:
         checkpoint_cnn_channels = self.cnn_channels
         checkpoint_cnn_output_channels = self.cnn_output_channels
         checkpoint_cnn_dilations = self.cnn_dilations
-        checkpoint_cnn_pool_size = self.cnn_pool_size
+        checkpoint_pool_size = self.old_cnn_pool_size
         if checkpoint_state_mode in ("grid", "hybrid"):
             # Grid/Hybrid 禁止缺失字段时退回默认架构，避免静默加载错误的网络结构。
             required_cnn_fields = {
                 "cnn_channels",
                 "cnn_output_channels",
                 "cnn_dilations",
-                "cnn_pool_size",
             }
+            if checkpoint_architecture_version == 2:
+                required_cnn_fields.add("cnn_pool_size")
             if checkpoint_state_mode == "hybrid":
                 required_cnn_fields.add("auxiliary_size")
             missing_fields = required_cnn_fields.difference(checkpoint)
@@ -351,20 +381,26 @@ class DQNAgent:
             checkpoint_cnn_dilations = tuple(
                 int(value) for value in checkpoint["cnn_dilations"]
             )
-            checkpoint_cnn_pool_size = tuple(
-                int(value) for value in checkpoint["cnn_pool_size"]
-            )
-        if checkpoint_state_size != self.state_size:
-            raise ValueError(
-                f"Checkpoint state_size={checkpoint_state_size} does not match "
-                f"current agent state_size={self.state_size}. Retrain the model after "
-                "changing the environment state features."
-            )
-        if checkpoint_state_mode != self.state_mode:
-            raise ValueError(
-                f"Checkpoint state_mode={checkpoint_state_mode!r} does not match "
-                f"current agent state_mode={self.state_mode!r}."
-            )
+            if checkpoint_architecture_version == 2:
+                if not isinstance(checkpoint_state_size, tuple) or len(checkpoint_state_size) != 3:
+                    raise ValueError("Version 2 Grid/Hybrid checkpoint has invalid state_size metadata.")
+                checkpoint_pool_size = tuple(
+                    int(value) for value in checkpoint["cnn_pool_size"]
+                )
+                checkpoint_grid_size = (
+                    int(checkpoint_state_size[1]),
+                    int(checkpoint_state_size[2]),
+                )
+                if (
+                    self.network_type == "q_network"
+                    and checkpoint_pool_size != checkpoint_grid_size
+                ):
+                    raise ValueError(
+                        "This version 2 Grid/Hybrid checkpoint used a fixed pooled size "
+                        f"of {checkpoint_pool_size} for grid size {checkpoint_grid_size}; "
+                        "its fully connected input is incompatible with the dynamic-grid "
+                        "architecture. Retrain this grid size."
+                    )
         if checkpoint_state_mode == "hybrid" and checkpoint_auxiliary_size != self.auxiliary_size:
             raise ValueError(
                 f"Checkpoint auxiliary_size={checkpoint_auxiliary_size} does not match "
@@ -376,7 +412,10 @@ class DQNAgent:
             or checkpoint_cnn_channels != self.cnn_channels
             or checkpoint_cnn_output_channels != self.cnn_output_channels
             or checkpoint_cnn_dilations != self.cnn_dilations
-            or checkpoint_cnn_pool_size != self.cnn_pool_size
+            or (
+                self.network_type == "q_network_old"
+                and checkpoint_pool_size != self.old_cnn_pool_size
+            )
         )
         # 按 checkpoint 中记录的完整架构参数重建网络，再加载对应权重。
         if architecture_changed:
@@ -385,7 +424,7 @@ class DQNAgent:
             self.cnn_channels = checkpoint_cnn_channels
             self.cnn_output_channels = checkpoint_cnn_output_channels
             self.cnn_dilations = checkpoint_cnn_dilations
-            self.cnn_pool_size = checkpoint_cnn_pool_size
+            self.old_cnn_pool_size = checkpoint_pool_size
             self.policy_net = self._build_network()
             self.target_net = self._build_network()
             self.target_net.eval()

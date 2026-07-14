@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
-# Strict configuration reproduction for dqn_20260712_130642.
-# This script intentionally accepts no overrides: changing one value would no longer
-# be a strict reproduction of experiment 8.
+# Experiment 8 reward/training configuration on the current dynamic-grid architecture.
+# The original version 2 adaptive-pooling architecture is intentionally not reproduced.
 set -euo pipefail
 
 if (( $# != 0 )); then
@@ -32,5 +31,5 @@ uv run python -m snake_ai.train \
     --cnn-channels 32 \
     --cnn-output-channels 8 \
     --cnn-dilations 1 1 2 \
-    --cnn-pool-size 10 10 \
+    --deterministic \
     --seed 42

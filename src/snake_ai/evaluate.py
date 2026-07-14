@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import time
 from pathlib import Path
 
 import torch
@@ -16,6 +15,7 @@ from snake_ai.agents import DQNAgent
 from snake_ai.config import CHECKPOINT_DIR, RUNS_DIR, EnvConfig, TrainConfig
 from snake_ai.game import SnakeEnv
 from snake_ai.utils import set_seed, summarize_values
+from snake_ai.validation import ValidationEpisode, evaluate_policy, make_episode_seeds
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -44,6 +44,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-output-dir", type=Path, default=None)
     parser.add_argument(
         "--state-mode", choices=("vector", "grid", "hybrid"), default=None
+    )
+    parser.add_argument(
+        "--network",
+        choices=DQNAgent.NETWORK_TYPES,
+        default="q_network",
+        help="Q network implementation used to load the checkpoint",
     )
     return parser.parse_args()
 
@@ -185,6 +191,7 @@ def main() -> None:
 
     print(f"checkpoint={checkpoint_path}")
     print(f"state_mode={state_mode}")
+    print(f"network={args.network}")
     if output_dir is not None:
         print(f"output_dir={output_dir}")
 
@@ -215,20 +222,17 @@ def main() -> None:
         # epsilon值的下限(评估时Epsilon-Greedy关闭)
         epsilon_end=0.0,
         state_mode=state_mode,
+        network_type=args.network,
         # load() 会在必要时使用 checkpoint 中的 CNN 参数重建当前默认网络。
         auxiliary_size=env.state_size,
         cnn_channels=train_config.cnn_channels,
         cnn_output_channels=train_config.cnn_output_channels,
         cnn_dilations=train_config.cnn_dilations,
-        cnn_pool_size=train_config.cnn_pool_size,
         seed=train_config.seed,
     )
 
     # 加载模型参数用于测试
     agent.load(checkpoint_path)
-
-    # 动态计算满分：棋盘总格数减去 reset 后的初始蛇长。
-    full_score = env.width * env.height - len(env.snake)
 
     scores: list[int] = []
     steps: list[int] = []
@@ -242,7 +246,53 @@ def main() -> None:
         "max_snake_length": 0.0,
     }
     csv_file = None
-    eval_start_time = time.perf_counter()
+    metrics = None
+
+    def record_episode(episode: int, result: ValidationEpisode) -> None:
+        scores.append(result.score)
+        steps.append(result.steps)
+        max_lengths.append(result.max_snake_length)
+        score_per_steps.append(result.score_per_step)
+        running_totals["score"] += result.score
+        running_totals["steps"] += result.steps
+        running_totals["score_per_step"] += result.score_per_step
+        running_totals["max_snake_length"] += result.max_snake_length
+
+        print(
+            f"episode={episode:4d}  score={result.score:3d}  "
+            f"steps={result.steps:4d}  max_len={result.max_snake_length}  "
+            f"eff={result.score_per_step:.4f}  timed_out={result.timed_out}"
+        )
+
+        if writer is not None:
+            writer.add_scalar("eval/score", result.score, episode)
+            writer.add_scalar("eval/steps", result.steps, episode)
+            writer.add_scalar("eval/score_per_step", result.score_per_step, episode)
+            writer.add_scalar(
+                "eval/max_snake_length",
+                result.max_snake_length,
+                episode,
+            )
+            writer.add_scalar("eval/timed_out", int(result.timed_out), episode)
+            for metric_name, total in running_totals.items():
+                writer.add_scalar(
+                    f"eval_running_mean/{metric_name}",
+                    total / episode,
+                    episode,
+                )
+
+        if metrics is not None:
+            metrics.writerow(
+                [
+                    episode,
+                    result.score,
+                    result.steps,
+                    f"{result.score_per_step:.6f}",
+                    result.max_snake_length,
+                ]
+            )
+            csv_file.flush()
+
     try:
         if csv_path is not None:
             csv_file = csv_path.open("a", newline="", encoding="utf-8")
@@ -259,93 +309,37 @@ def main() -> None:
                     ]
                 )
 
-        for episode in range(1, args.episodes + 1):
-            state = env.reset()
-            done = False
-            info = {"score": 0}
-            # 每局开始时记录 reset 后的初始蛇长，后续吃到食物会增长
-            max_snake_length = len(env.snake)
-            evaluation_steps = 0
-
-            # 评估时只进行动作采样和环境反馈。
-            while not done and evaluation_steps < args.max_steps:
-                action = agent.act(state, training=False)
-                state, _, done, info = env.step(action)
-                evaluation_steps += 1
-                # 每步记录蛇身长度，追踪本局峰值
-                current_length = int(info["snake_length"])
-                if current_length > max_snake_length:
-                    max_snake_length = current_length
-
-            # 记录这次episode的各项指标
-            score = int(info["score"])
-            episode_steps = int(info["steps"])
-            scores.append(score)
-            steps.append(episode_steps)
-            max_lengths.append(max_snake_length)
-            # 吃食效率 = 吃到的食物数 / 存活步数
-            score_per_step = score / episode_steps if episode_steps > 0 else 0.0
-            score_per_steps.append(score_per_step)
-            running_totals["score"] += score
-            running_totals["steps"] += episode_steps
-            running_totals["score_per_step"] += score_per_step
-            running_totals["max_snake_length"] += max_snake_length
-
-            # 每个episode输出一次信息。
-            print(
-                f"episode={episode:4d}  score={score:3d}  "
-                f"steps={episode_steps:4d}  max_len={max_snake_length}  "
-                f"eff={score_per_step:.4f}"
+        seeds = make_episode_seeds(train_config.seed, "final", args.episodes)
+        result = evaluate_policy(
+            agent,
+            env,
+            seeds,
+            seed_set="final",
+            max_steps=args.max_steps,
+            on_episode=record_episode,
+        )
+        if writer is not None:
+            writer.add_scalar("eval_summary/full_score", result.full_score, result.episodes)
+            writer.add_scalar("eval_summary/full_games", result.full_games, result.episodes)
+            writer.add_scalar("eval_summary/full_rate", result.full_rate, result.episodes)
+            writer.add_scalar(
+                "eval_summary/timeout_rate",
+                result.timeout_rate,
+                result.episodes,
             )
-
-            if writer is not None:
-                # 单局得分
-                writer.add_scalar("eval/score", score, episode)
-                # 存活步数
-                writer.add_scalar("eval/steps", episode_steps, episode)
-                # 吃食效率
-                writer.add_scalar("eval/score_per_step", score_per_step, episode)
-                # 本局最大蛇身长度
-                writer.add_scalar("eval/max_snake_length", max_snake_length, episode)
-                # 累计均值比独立 episode 折线稳定，最后一点等于本次评估总体均值。
-                for metric_name, total in running_totals.items():
-                    writer.add_scalar(
-                        f"eval_running_mean/{metric_name}",
-                        total / episode,
-                        episode,
-                    )
-
-            if csv_path is not None:
-                metrics.writerow(
-                    [
-                        episode,
-                        score,
-                        episode_steps,
-                        f"{score_per_step:.6f}",
-                        max_snake_length,
-                    ]
-                )
-                csv_file.flush()
-        if scores and writer is not None:
-            total_time_sec = time.perf_counter() - eval_start_time
-            full_games = sum(1 for score in scores if score >= full_score)
-            full_rate = full_games / len(scores)
-            writer.add_scalar("eval_summary/full_score", full_score, len(scores))
-            writer.add_scalar("eval_summary/full_games", full_games, len(scores))
-            writer.add_scalar("eval_summary/full_rate", full_rate, len(scores))
             writer.add_text(
                 "eval/report",
                 format_eval_report(
                     checkpoint_path=checkpoint_path,
-                    episodes=len(scores),
-                    total_time_sec=total_time_sec,
+                    episodes=result.episodes,
+                    total_time_sec=result.total_time_sec,
                     scores=scores,
                     steps=steps,
                     score_per_steps=score_per_steps,
                     max_lengths=max_lengths,
-                    full_score=full_score,
+                    full_score=result.full_score,
                 ),
-                global_step=len(scores),
+                global_step=result.episodes,
             )
     finally:
         env.close()
@@ -354,21 +348,16 @@ def main() -> None:
         if csv_file is not None:
             csv_file.close()
 
-    # 输出本次评估的汇总统计
-    if scores:
-        avg_score = sum(scores) / len(scores)
-        avg_steps = sum(steps) / len(steps)
-        avg_eff = sum(score_per_steps) / len(score_per_steps)
-        avg_max_len = sum(max_lengths) / len(max_lengths)
-        full_games = sum(1 for score in scores if score >= full_score)
-        full_rate = full_games / len(scores)
-        print(
-            f"average_score={avg_score:.2f}  best_score={max(scores)}  "
-            f"avg_steps={avg_steps:.1f}  avg_eff={avg_eff:.4f}  "
-            f"avg_max_len={avg_max_len:.2f}  "
-            f"full_score={full_score}  full_games={full_games}/{len(scores)}  "
-            f"full_rate={full_rate * 100:.2f}%"
-        )
+    print(
+        f"average_score={result.mean_score:.2f}  best_score={result.max_score}  "
+        f"avg_steps={result.mean_steps:.1f}  "
+        f"avg_eff={result.mean_score_per_step:.4f}  "
+        f"avg_max_len={result.mean_max_snake_length:.2f}  "
+        f"full_score={result.full_score}  "
+        f"full_games={result.full_games}/{result.episodes}  "
+        f"full_rate={result.full_rate * 100:.2f}%  "
+        f"timeout_rate={result.timeout_rate * 100:.2f}%"
+    )
 
 
 if __name__ == "__main__":

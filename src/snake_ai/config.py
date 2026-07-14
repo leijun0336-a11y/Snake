@@ -135,6 +135,4 @@ class TrainConfig:
     cnn_output_channels: int = 8
     # 三个卷积块中对应的膨胀率，分别为 1、1、2。
     cnn_dilations: tuple[int, ...] = (1, 1, 2)
-    # 平均池化后的高宽
-    cnn_pool_size: tuple[int, int] = (10, 10)
     seed: int = 42

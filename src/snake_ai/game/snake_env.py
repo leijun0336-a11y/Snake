@@ -160,7 +160,9 @@ class SnakeEnv:
         self.termination_reason = "none"
         self.reset()
 
-    def reset(self) -> Observation:
+    def reset(self, seed: int | None = None) -> Observation:
+        if seed is not None:
+            self.random.seed(seed)
         center = Point(self.width // 2, self.height // 2)
         self.direction = Direction.RIGHT
         

@@ -20,6 +20,15 @@ from snake_ai.config import (
 )
 from snake_ai.game import SnakeEnv
 from snake_ai.utils import set_seed, summarize_values
+from snake_ai.validation import (
+    DEFAULT_SELECTION_THRESHOLDS,
+    SeedSetName,
+    StagedValidationState,
+    ValidationResult,
+    evaluate_policy,
+    make_episode_seeds,
+    run_staged_validation,
+)
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -72,16 +81,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cnn-channels", type=int, default=TrainConfig.cnn_channels)
     parser.add_argument("--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels)
     parser.add_argument("--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations)
-    parser.add_argument("--cnn-pool-size", type=int, nargs=2, default=TrainConfig.cnn_pool_size)
     # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
     parser.add_argument("--early-stop",action="store_true")
-    # 至少训练多少局后，才允许早停判断生效。
+    # 至少训练多少局后，才允许基于阶段验证的早停判断生效。
     parser.add_argument("--min-episodes", type=int, default=5000)
-    # 超过最小训练局数后，允许连续多少局没有有效提升。
-    parser.add_argument("--patience", type=int, default=500)
-    # mean_score_100 至少提升多少，才算一次有效提升。
-    parser.add_argument("--min-delta", type=float, default=0.5)
-    # 如果设置了目标平均分，达到该 mean_score_100 后直接停止训练。
+    parser.add_argument("--validation-interval", type=int, default=500)
+    parser.add_argument("--validation-episodes", type=int, default=100)
+    parser.add_argument("--confirmation-episodes", type=int, default=500)
+    parser.add_argument("--validation-patience", type=int, default=8)
+    parser.add_argument("--validation-max-steps", type=int, default=1000)
+    # 如果设置了目标平均分，确认验证达到该值后停止训练。
     parser.add_argument("--target-mean-score", type=float, default=None)
     return parser.parse_args()
 
@@ -131,12 +140,18 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("min_episodes must be at least 1")
     if args.min_episodes > max_episodes:
         raise ValueError("min_episodes must be less than or equal to max episodes")
+    if args.validation_interval < 1:
+        raise ValueError("validation_interval must be at least 1")
+    if args.validation_episodes < 1 or args.confirmation_episodes < 1:
+        raise ValueError("validation episode counts must be at least 1")
+    if args.validation_patience < 1:
+        raise ValueError("validation_patience must be at least 1")
+    if args.validation_max_steps < 1:
+        raise ValueError("validation_max_steps must be at least 1")
     if args.cnn_channels <= 0 or args.cnn_output_channels <= 0:
         raise ValueError("CNN channel sizes must be positive")
     if any(dilation <= 0 for dilation in args.cnn_dilations):
         raise ValueError("cnn_dilations must contain positive integers")
-    if any(size <= 0 for size in args.cnn_pool_size):
-        raise ValueError("cnn_pool_size must contain positive integers")
 
     train_config = TrainConfig(
         episodes=max_episodes,
@@ -155,7 +170,6 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         cnn_channels=args.cnn_channels,
         cnn_output_channels=args.cnn_output_channels,
         cnn_dilations=tuple(args.cnn_dilations),
-        cnn_pool_size=tuple(args.cnn_pool_size),
         seed=args.seed,
     )
     env_config = EnvConfig(
@@ -168,47 +182,52 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
 
 
 # 在训练开始前，打印一份“训练会在什么条件下停止”的概览
-def print_stop_overview(args: argparse.Namespace, max_episodes: int) -> None:
+def print_stop_overview(
+    args: argparse.Namespace,
+    train_config: TrainConfig,
+) -> None:
     early_stop_enabled = args.early_stop
-    patience_earliest_episode = max(args.min_episodes, args.patience + 1)
-    target_earliest_episode = 100 if args.target_mean_score is not None else None
-    earliest_candidates = [patience_earliest_episode]
-    if target_earliest_episode is not None:
-        earliest_candidates.append(target_earliest_episode)
-    reachable_earliest_candidates = [
-        episode for episode in earliest_candidates if episode <= max_episodes
-    ]
-    earliest_stop_text = (
-        str(min(reachable_earliest_candidates))
-        if reachable_earliest_candidates
-        else "not reachable within max episodes"
+    epsilon_floor_text = (
+        "dynamic (exponential decay)"
+        if train_config.epsilon_exp_decay
+        else str(train_config.epsilon_linear_episodes)
     )
 
     print("")
     print("========== training stop overview ==========")
-    print(f"max episodes without early stop : {max_episodes}")
+    print(f"max episodes without early stop : {train_config.episodes}")
+    print(f"best selection starts at        : epsilon floor ({epsilon_floor_text})")
+    print(
+        "staged validation              : "
+        f"{args.validation_episodes} quick / "
+        f"{args.confirmation_episodes} confirmation episodes, "
+        f"every {args.validation_interval} training episodes"
+    )
     print(f"early stop enabled              : {early_stop_enabled}")
     if not early_stop_enabled:
         print("earliest early stop episode     : disabled")
         print("actual stop condition           : run until max episodes")
     else:
-        print(f"earliest early stop episode     : {earliest_stop_text}")
-        if target_earliest_episode is None:
+        print(
+            "early stop eligibility         : "
+            f"epsilon at floor and episode >= {args.min_episodes}"
+        )
+        if args.target_mean_score is None:
             print("target mean score stop          : disabled")
         else:
             print(
                 "target mean score stop          : "
-                f"episode >= {target_earliest_episode}, "
-                f"mean_score_100 >= {args.target_mean_score:.2f}"
+                f"confirmation mean >= {args.target_mean_score:.2f}"
             )
         print(
             "patience stop                   : "
-            f"episode >= {args.min_episodes}, "
-            f"no effective improvement for {args.patience} episodes"
+            f"no confirmed best update for "
+            f"{args.validation_patience} eligible validation rounds"
         )
-        print(f"earliest patience stop episode  : {patience_earliest_episode}")
-        if patience_earliest_episode > max_episodes:
-            print("patience stop within max episode: impossible with current settings")
+        print(
+            "final patience check            : "
+            f"{args.confirmation_episodes}-episode confirmation is required"
+        )
     print("============================================")
     print("")
 
@@ -281,13 +300,14 @@ def main() -> None:
 
     print(f"run_dir={run_dir}")
     print(f"checkpoint_dir={checkpoint_dir}")
-    print_stop_overview(args, train_config.episodes)
+    print_stop_overview(args, train_config)
 
     # 在指定的文件夹（这里是刚才创建的 run_dir）里新建训练日志文件；.train 后缀方便和评估日志区分。
     writer = SummaryWriter(run_dir, filename_suffix=".train") if SummaryWriter is not None else None
     
-    # train_metrics.csv 是训练指标表格文件；和 eval_metrics.csv 配对，文件名能直接看出用途。
+    # 训练指标和阶段验证指标分开保存。
     csv_path = run_dir / "train_metrics.csv"
+    validation_csv_path = run_dir / "validation_metrics.csv"
 
     env = SnakeEnv(
         width=env_config.width,
@@ -341,8 +361,27 @@ def main() -> None:
         cnn_channels=train_config.cnn_channels,
         cnn_output_channels=train_config.cnn_output_channels,
         cnn_dilations=train_config.cnn_dilations,
-        cnn_pool_size=train_config.cnn_pool_size,
         seed=train_config.seed,
+    )
+    validation_env = SnakeEnv(
+        width=env_config.width,
+        height=env_config.height,
+        render_mode=False,
+        cell_size=env_config.cell_size,
+        fps=env_config.fps,
+        seed=train_config.seed,
+        starvation_enabled=False,
+        state_mode=args.state_mode,
+    )
+    quick_seeds = make_episode_seeds(
+        train_config.seed,
+        "quick",
+        args.validation_episodes,
+    )
+    confirmation_seeds = make_episode_seeds(
+        train_config.seed,
+        "confirmation",
+        args.confirmation_episodes,
     )
 
     # 同时写入 run/checkpoint 目录，并嵌入每个 checkpoint。以后不再依赖日志反推奖励。
@@ -363,9 +402,18 @@ def main() -> None:
         "early_stop": {
             "enabled": args.early_stop,
             "min_episodes": args.min_episodes,
-            "patience": args.patience,
-            "min_delta": args.min_delta,
+            "validation_patience": args.validation_patience,
             "target_mean_score": args.target_mean_score,
+        },
+        "validation": {
+            "interval": args.validation_interval,
+            "quick_episodes": args.validation_episodes,
+            "confirmation_episodes": args.confirmation_episodes,
+            "max_steps": args.validation_max_steps,
+            "quick_seed_start": quick_seeds[0],
+            "confirmation_seed_start": confirmation_seeds[0],
+            "selection_thresholds": asdict(DEFAULT_SELECTION_THRESHOLDS),
+            "starvation_enabled": False,
         },
         "deterministic": args.deterministic,
     }
@@ -406,17 +454,17 @@ def main() -> None:
     replay_buffer_sizes: list[int] = []
     # 历史单局最高分，仅用于终端输出观察。
     best_score = -1
-    # 历史最高 mean_score_100，用于决定何时保存 best.pt。
+    # 历史最高训练 mean_score_100 只用于观察，不再决定 best.pt。
     best_mean_score = float("-inf")
-    # 早停判断中的历史最高有效 mean_score_100，小于 min_delta 的提升不重置耐心计数。
-    early_stop_best_mean_score = float("-inf")
-    # 最近一次达到有效提升的 episode，用于判断是否长时间没有明显进步。
-    last_improve_episode = 0
+    validation_state = StagedValidationState()
     # 训练开始时间，用于计算 train/report 中的总耗时。
     train_start_time = time.perf_counter()
 
     # 在 CSV 文件中写入训练指标表头
-    with csv_path.open("w", newline="", encoding="utf-8") as file:
+    with (
+        csv_path.open("w", newline="", encoding="utf-8") as file,
+        validation_csv_path.open("w", newline="", encoding="utf-8") as validation_file,
+    ):
         metrics = csv.writer(file)
         metrics.writerow(
             [
@@ -439,6 +487,127 @@ def main() -> None:
                 "replay_buffer_size",
             ]
         )
+        validation_metrics = csv.writer(validation_file)
+        validation_metrics.writerow(
+            [
+                "training_episode",
+                "stage",
+                "seed_set",
+                "validation_episodes",
+                "max_steps",
+                "mean_score",
+                "score_std",
+                "min_score",
+                "max_score",
+                "full_score",
+                "full_games",
+                "full_rate",
+                "mean_steps",
+                "timeout_games",
+                "timeout_rate",
+                "passed_stage",
+                "promoted_to_best",
+                "best_training_episode",
+                "evaluation_time_sec",
+            ]
+        )
+
+        def run_validation(
+            training_episode: int,
+            seed_set: SeedSetName,
+        ) -> ValidationResult:
+            if seed_set == "quick":
+                seeds = quick_seeds
+            elif seed_set == "confirmation":
+                seeds = confirmation_seeds
+            else:
+                raise ValueError(f"unsupported training validation seed set: {seed_set}")
+            print(
+                f"validation_start episode={training_episode} "
+                f"stage={seed_set} episodes={len(seeds)}"
+            )
+            result = evaluate_policy(
+                agent,
+                validation_env,
+                seeds,
+                seed_set=seed_set,
+                max_steps=args.validation_max_steps,
+            )
+            print(
+                f"validation_end episode={training_episode} stage={seed_set} "
+                f"mean={result.mean_score:.3f} std={result.score_std:.3f} "
+                f"full_rate={result.full_rate * 100:.2f}% "
+                f"timeout_rate={result.timeout_rate * 100:.2f}% "
+                f"time={result.total_time_sec:.1f}s"
+            )
+            return result
+
+        def record_validation(
+            training_episode: int,
+            stage: str,
+            result: ValidationResult,
+            *,
+            passed_stage: bool,
+            promoted_to_best: bool,
+        ) -> None:
+            validation_metrics.writerow(
+                [
+                    training_episode,
+                    stage,
+                    result.seed_set,
+                    result.episodes,
+                    result.max_steps,
+                    f"{result.mean_score:.6f}",
+                    f"{result.score_std:.6f}",
+                    result.min_score,
+                    result.max_score,
+                    result.full_score,
+                    result.full_games,
+                    f"{result.full_rate:.6f}",
+                    f"{result.mean_steps:.6f}",
+                    result.timeout_games,
+                    f"{result.timeout_rate:.6f}",
+                    passed_stage,
+                    promoted_to_best,
+                    validation_state.best_training_episode,
+                    f"{result.total_time_sec:.6f}",
+                ]
+            )
+            validation_file.flush()
+            if writer is not None:
+                tag_stage = "quick" if result.seed_set == "quick" else "confirmation"
+                writer.add_scalar(
+                    f"validation/{tag_stage}_mean_score",
+                    result.mean_score,
+                    training_episode,
+                )
+                writer.add_scalar(
+                    f"validation/{tag_stage}_full_rate",
+                    result.full_rate,
+                    training_episode,
+                )
+                writer.add_scalar(
+                    f"validation/{tag_stage}_timeout_rate",
+                    result.timeout_rate,
+                    training_episode,
+                )
+
+        def save_best(
+            training_episode: int,
+            quick_result: ValidationResult,
+            confirmation_result: ValidationResult,
+        ) -> None:
+            metadata = {
+                **run_config,
+                "selection": {
+                    "training_episode": training_episode,
+                    "quick": quick_result.to_dict(),
+                    "confirmation": confirmation_result.to_dict(),
+                    "selection_metric": "mean_score_then_full_rate",
+                    "selection_thresholds": asdict(DEFAULT_SELECTION_THRESHOLDS),
+                },
+            }
+            agent.save(checkpoint_dir / "best.pt", metadata=metadata)
 
         try:
             for episode in range(1, train_config.episodes + 1):
@@ -514,15 +683,9 @@ def main() -> None:
                 if score > best_score:
                     best_score = score
 
-                # 保存最近 100 局平均分最高时的参数；不足 100 局时用已有局数的平均分。
+                # 训练 mean_score_100 只保留为诊断指标。
                 if mean_score > best_mean_score:
                     best_mean_score = mean_score
-                    agent.save(checkpoint_dir / "best.pt", metadata=run_config)
-
-                # 早停使用 mean_score_100 判断收敛，不使用 reward，避免奖励塑形影响模型选择。
-                if mean_score > early_stop_best_mean_score + args.min_delta:
-                    early_stop_best_mean_score = mean_score
-                    last_improve_episode = episode
 
                 # 将训练指标写入 TensorBoard
                 if writer is not None:
@@ -581,6 +744,54 @@ def main() -> None:
                 # 存下最近一次episode更新出来的参数
                 agent.save(checkpoint_dir / "latest.pt", metadata=run_config)
 
+                decision = run_staged_validation(
+                    episode=episode,
+                    epsilon=agent.epsilon,
+                    epsilon_end=agent.epsilon_end,
+                    state=validation_state,
+                    evaluator=lambda seed_set: run_validation(episode, seed_set),
+                    interval=args.validation_interval,
+                    early_stop_enabled=args.early_stop,
+                    min_episodes=args.min_episodes,
+                    patience=args.validation_patience,
+                    target_mean_score=args.target_mean_score,
+                )
+                for event in decision.events:
+                    record_validation(
+                        episode,
+                        event.stage,
+                        event.result,
+                        passed_stage=event.passed_stage,
+                        promoted_to_best=event.promoted_to_best,
+                    )
+
+                if decision.best_updated:
+                    if (
+                        validation_state.best_quick is None
+                        or validation_state.best_confirmation is None
+                        or validation_state.best_training_episode is None
+                    ):
+                        raise RuntimeError("best update is missing validation results")
+                    save_best(
+                        validation_state.best_training_episode,
+                        validation_state.best_quick,
+                        validation_state.best_confirmation,
+                    )
+                    print(
+                        f"best_updated episode={validation_state.best_training_episode} "
+                        f"mean={validation_state.best_confirmation.mean_score:.3f} "
+                        f"full_rate="
+                        f"{validation_state.best_confirmation.full_rate * 100:.2f}%"
+                    )
+
+                if decision.stop_reason is not None:
+                    print(
+                        f"early_stop={decision.stop_reason} episode={episode} "
+                        f"rounds_without_improvement="
+                        f"{validation_state.rounds_without_improvement} "
+                        f"best_episode={validation_state.best_training_episode}"
+                    )
+
                 # 每个episode输出一次指标信息
                 print(
                     f"episode={episode:4d} score={score:3d} steps={episode_steps:4d} "
@@ -589,36 +800,11 @@ def main() -> None:
                     f"loss={mean_loss:.4f} best_score={best_score}"
                 )
 
-                # early_stop_enabled 统一控制下面两种早停条件是否生效。
-                early_stop_enabled = args.early_stop
-                # 达到目标 mean_score_100 后停止；至少等 100 局，避免前期均值窗口太短。
-                reached_target = (
-                    args.target_mean_score is not None
-                    and episode >= 100
-                    and mean_score >= args.target_mean_score
-                )
-                # 超过最小训练局数后，如果太久没有有效提升，则认为进入平台期。
-                patience_exhausted = (
-                    episode >= args.min_episodes
-                    and episode - last_improve_episode >= args.patience
-                )
-                if early_stop_enabled and reached_target:
-                    print(
-                        f"early_stop=target_mean_score "
-                        f"episode={episode} mean100={mean_score:.2f} "
-                        f"target={args.target_mean_score:.2f}"
-                    )
-                    break
-                if early_stop_enabled and patience_exhausted:
-                    print(
-                        f"early_stop=patience episode={episode} "
-                        f"best_mean100={best_mean_score:.2f} "
-                        f"last_improve_episode={last_improve_episode} "
-                        f"patience={args.patience}"
-                    )
+                if decision.stop_reason is not None:
                     break
         finally:  # 无论上面是否跑完，这段代码都必须执行。
             env.close()
+            validation_env.close()
             if writer is not None:
                 if scores:
                     writer.add_text(
@@ -643,6 +829,12 @@ def main() -> None:
                         global_step=len(scores),
                     )
                 writer.close()
+
+    if validation_state.best_training_episode is None:
+        print(
+            "best_not_created=epsilon_did_not_reach_floor "
+            "latest.pt remains available; no fallback checkpoint was selected"
+        )
 
 
 if __name__ == "__main__":

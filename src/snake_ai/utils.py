@@ -46,8 +46,9 @@ def set_seed(seed: int = 42, deterministic: bool = True) -> None:
         torch.backends.cudnn.deterministic = True
         # 关闭 cuDNN 自动搜索最快算法，避免因算法选择带来不确定性。
         torch.backends.cudnn.benchmark = False
-        # 尽量要求 PyTorch 使用确定性算法；warn_only=True 避免遇到不支持的算子时直接报错。
-        torch.use_deterministic_algorithms(True, warn_only=True)
+        # 严格要求确定性算法；若算子没有确定性实现则立即报错，避免静默继续训练。
+        torch.use_deterministic_algorithms(True)
     else:
+        torch.use_deterministic_algorithms(False)
         torch.backends.cudnn.deterministic = False
         torch.backends.cudnn.benchmark = True

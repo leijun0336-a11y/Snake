@@ -16,6 +16,17 @@ def test_build_configs_resolves_evaluation_defaults(
     assert train_config.seed == 42
     assert env_config.width == 20
     assert env_config.height == 20
+    assert parse_args().network == "q_network"
+
+
+def test_parse_args_selects_old_q_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["evaluate.py", "--network", "q_network_old"],
+    )
+
+    assert parse_args().network == "q_network_old"
 
 
 def test_build_configs_matches_environment_minimum_size(

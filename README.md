@@ -78,6 +78,7 @@ uv run python -m snake_ai.train --state-mode hybrid
 - `checkpoints/<run_name>/best.pt`
 - `checkpoints/<run_name>/latest.pt`
 - `runs/<run_name>/train_metrics.csv`
+- `runs/<run_name>/validation_metrics.csv`
 - TensorBoard 训练日志，event 文件名带有 `.train` 后缀，包含逐局标量和 `train/report` 文本摘要
 
 训练日志会记录 `score`、`mean_score_100`、总奖励、各奖励分量、终止原因、`episode_steps`、`epsilon`、`loss`、`mean_loss_100` 和 `replay_buffer_size`。其中 `loss` 是 Huber loss。
@@ -106,9 +107,11 @@ uv run python -m snake_ai.train --potential-reward --no-cost-rewards
 bash scripts/train_experiment8_autodl.sh
 ```
 
-每个新 run 都会在 run 与 checkpoint 目录写入相同的 `config.json`，并把这份完整配置嵌入 `best.pt`/`latest.pt` 的 `run_config` 字段。
+每个新 run 都会在 run 与 checkpoint 目录写入相同的 `config.json`，并把这份完整配置嵌入 checkpoint 的 `run_config` 字段。
 
-训练默认不启用早停，会运行到 `--max-episodes` 指定的最大局数。显式传入 `--early-stop` 后，早停基于 `mean_score_100`，不基于 reward：先至少训练 `--min-episodes` 指定的局数；之后如果连续 `--patience` 局没有超过 `--min-delta` 级别的有效提升，就停止训练。`best.pt` 仍然保存历史最高 `mean_score_100` 对应的权重。也可以通过 `--target-mean-score` 设置达到目标平均分后停止，但该条件同样只在传入 `--early-stop` 后生效。
+`latest.pt` 始终保存最近训练状态；`best.pt` 只由独立的贪心阶段验证决定。epsilon 降到下限时先运行 100 局快速集和 500 局确认集并初始化 best；之后默认每 500 个训练 episode 运行快速验证，只有通过筛选并在确认集上达到更新门槛时才覆盖 best。验证使用独立环境、固定且互不重叠的逐局种子，不写 replay buffer，也不改变训练状态。
+
+训练默认不启用早停。显式传入 `--early-stop` 后，epsilon 到达下限且满足 `--min-episodes` 才开始累计验证 patience；连续 `--validation-patience` 轮没有确认提升时，停止前会补做或复用一次确认验证。`--target-mean-score` 同样依据确认验证均分，不再使用训练 `mean_score_100`。
 
 ## 评估
 
@@ -119,6 +122,15 @@ uv run python -m snake_ai.evaluate
 ```
 
 默认会加载最近一次训练目录中的 `checkpoints/<run_name>/latest.pt`。如需评估其他权重，使用 `--checkpoint` 显式指定。
+
+评估版本2历史网络（例如第八次6×6实验）时，显式选择只读旧网络实现：
+
+```bash
+uv run python -m snake_ai.evaluate \
+  --checkpoint checkpoints/dqn_20260712_130642/latest.pt \
+  --network q_network_old \
+  --width 6 --height 6 --no-render
+```
 
 评估产物默认绑定到被评估 checkpoint 对应的 `runs/<run_name>` 目录：
 
@@ -145,12 +157,14 @@ uv run python -m snake_ai.evaluate
 - `--cnn-channels`：Grid/Hybrid CNN 主干通道数，默认 `32`。
 - `--cnn-output-channels`：全局/局部分支各自使用的 1x1 卷积压缩通道数，默认 `8`。
 - `--cnn-dilations`：共享残差块第一层卷积的 dilation 序列，默认 `1 1 2`；每个块的第二层固定使用普通 3x3 卷积。
-- `--cnn-pool-size`：全局分支平均池化输出的高和宽，默认 `10 10`。
 - `--early-stop`：启用训练早停；默认关闭。
 - `--min-episodes`：早停生效前至少训练的 episode 数量。
-- `--patience`：超过最小训练局数后，允许连续多少个 episode 没有有效提升。
-- `--min-delta`：`mean_score_100` 至少提升多少才算一次有效提升。
-- `--target-mean-score`：达到指定 `mean_score_100` 后停止训练。
+- `--validation-interval`：epsilon 到达下限后，每隔多少训练 episode 进行快速验证，默认 `500`。
+- `--validation-episodes`：快速验证局数，默认 `100`。
+- `--confirmation-episodes`：确认验证局数，默认 `500`。
+- `--validation-patience`：连续多少轮阶段验证没有确认提升后进入早停最终确认，默认 `8`。
+- `--validation-max-steps`：每个阶段验证 episode 的最大步数，默认 `1000`。
+- `--target-mean-score`：确认验证均分达到该值后停止训练。
 
 评估参数：
 
@@ -163,6 +177,9 @@ uv run python -m snake_ai.evaluate
 - `--tensorboard`：写入 TensorBoard 评估日志和 `eval_metrics.csv`。
 - `--eval-output-dir`：指定评估指标输出目录。
 - `--state-mode`：指定评估状态输入模式；不指定时会从 checkpoint 自动读取。
+- `--network`：选择 `q_network` 或 `q_network_old`，默认 `q_network`；旧网络仅用于评估版本2历史checkpoint。
+
+独立评估使用最终测试种子集；每个 episode 都会按自己的固定种子重置环境，因此相同 checkpoint、参数和种子能够重复得到相同结果。快速集、确认集和最终测试集互不重叠。
 
 TensorBoard 参数：
 
@@ -247,22 +264,22 @@ Hybrid Q 网络先提取并展平 CNN 特征，再与 20 维状态拼接。
 Grid 和 Hybrid 共用带 GroupNorm 的双分支 CNN，默认结构为：
 
 ```text
-9 通道网格 [B, 9, 20, 20]
+9 通道网格 [B, 9, H, W]
   -> 3x3 Conv（32 通道）+ GroupNorm + ReLU
   -> ResidualBlock（第一层 dilation=1，第二层 dilation=1）
   -> ResidualBlock（第一层 dilation=1，第二层 dilation=1）
   -> ResidualBlock（第一层 dilation=2，第二层 dilation=1）
-  -> 共享特征图 [B, 32, 20, 20]
-       ├─ 全局分支：1x1 Conv 32->8 + GroupNorm + 2x2 AvgPool -> [B, 800]
+  -> 共享特征图 [B, 32, H, W]
+       ├─ 全局分支：1x1 Conv 32->8 + GroupNorm + Identity -> [B, 8*H*W]
        └─ 局部分支：1x1 Conv 32->8 + GroupNorm + 蛇头中心 5x5 裁剪 -> [B, 200]
-  -> 拼接为 [B, 1000]
+  -> Grid 拼接为 [B, 8*H*W+200]
 ```
 
-Grid 模式把 1000 维空间特征送入 `Linear(1000, 128)`；Hybrid 先拼接 20 维人工状态，形成 1020 维，再送入 `Linear(1020, 128)`。Grid/Hybrid 的 Dueling 分支分别为 `128 -> 64 -> 1` 和 `128 -> 64 -> 3`，最后按 `Q = V + A - mean(A)` 合成三个动作的 Q 值。默认 Grid policy network 有 `203,780` 个参数，Hybrid 有 `206,340` 个参数。
+Grid 模式把 `8*H*W+200` 维空间特征送入隐藏层；Hybrid 再拼接 20 维人工状态，形成 `8*H*W+220` 维。默认隐藏层为 `256`，Grid/Hybrid 的 Dueling 分支分别为 `256 -> 128 -> 1` 和 `256 -> 128 -> 3`，最后按 `Q = V + A - mean(A)` 合成三个动作的 Q 值。网络参数量会随棋盘面积变化。
 
 局部分支将四个方向蛇头通道相加以定位蛇头，先在共享特征图外围补 2 格，再通过 `F.unfold + gather` 批量提取每个样本的 5x5 窗口，因此蛇头位于边角时形状仍固定，并且整个路径可以反向传播。
 
-CNN 的主干通道数、分支压缩通道数、dilation 序列和全局池化尺寸已经参数化。训练保存的 checkpoint 会记录这些架构参数和 `architecture_version=2`，评估时自动按 checkpoint 重建网络。不同 state mode 的 checkpoint 不能混用；旧 6 通道 Grid/Hybrid checkpoint 与当前 9 通道双分支结构不兼容，加载时会明确要求重新训练，而不会静默错载。
+CNN 的主干通道数、分支压缩通道数和 dilation 序列已经参数化；空间宽高直接取自 `--width` 和 `--height`，不再使用自适应池化。训练保存的 checkpoint 会记录这些架构参数和 `architecture_version=3`。默认 `q_network` 可直接兼容版本2的10×10 checkpoint；版本2的6×6和20×20 checkpoint需要在评估时显式选择 `q_network_old`。旧网络保留历史池化结构，但DQNAgent会禁止其训练和保存。
 
 Grid/Hybrid 的状态数据使用连续 NumPy 数组保存。动作选择时通过
 `torch.from_numpy()` 读取单个状态；经验回放采样后先用一次 `np.stack()`
@@ -280,7 +297,7 @@ Grid/Hybrid 的状态数据使用连续 NumPy 数组保存。动作选择时通�
 | 单局得分 | `train/score` | `score` | 当前 episode 吃到的食物数。 |
 | 吃食效率 | `train/score_per_step` | `score_per_step` | `score / episode_steps`。 |
 | 近 100 局平均得分 | `train/mean_score_100` | `mean_score_100` | 最近最多 100 个 episode 的 `score` 平均值。 |
-| 历史最高近 100 局平均得分 | `train/best_mean_score_100` | 无 | 历史最高 `mean_score_100`，用于保存 `best.pt`。 |
+| 历史最高近 100 局平均得分 | `train/best_mean_score_100` | 无 | 仅用于观察训练曲线，不参与 `best.pt` 选择。 |
 | 单局累计奖励 | `train/episode_reward` | `episode_reward` | 当前 episode 内所有 step 的 reward 总和。 |
 | 近 100 局平均累计奖励 | `train/mean_reward_100` | `mean_reward_100` | 最近最多 100 个 episode 的 `episode_reward` 平均值。 |
 | 食物事件奖励 | `train/reward_food` | `food_reward` | 当前 episode 的食物事件奖励总和。 |
