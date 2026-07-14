@@ -44,24 +44,37 @@ class SnakeEnv:
         self,
         width: int = 20,
         height: int = 20,
-        # 是否开启渲染
+        # 是否创建渲染器并显示游戏画面。
         render_mode: bool = False,
-        # 每个格子的像素个数
+        # 渲染时每个棋盘格的边长，单位为像素。
         cell_size: int = 24,
         fps: int = 30,
         seed: int | None = None,
+        # observation 模式：vector、grid 或 hybrid。
         state_mode: str = "vector",
+        # 奖励配置名称，用于提供奖励数值和边界语义的默认值。
         reward_profile: str = "reference",
+        # 控制蛇是否会因为“太久没有吃到食物”而结束游戏。
         starvation_enabled: bool = True,
+        # 是否启用势函数进度奖励；None 表示使用 reward profile 的默认值。
         potential_reward: bool | None = None,
+        # 是否启用爬行成本和饥饿成本；None 表示使用 reward profile 的默认值。
         cost_rewards: bool | None = None,
+        # 势函数进度奖励中的折扣因子 gamma，取值范围为 0 到 1。
         reward_gamma: float = 0.99,
+        # 势函数进度奖励的缩放系数 beta；None 表示使用 profile 默认值。
         progress_beta: float | None = None,
+        # 吃到食物时的奖励；None 表示使用 profile 默认值。
         food_reward: float | None = None,
+        # 撞墙或撞到身体时的终止惩罚；None 表示使用 profile 默认值。
         collision_penalty: float | None = None,
+        # 饿死时的终止惩罚；None 表示使用 profile 默认值。
         starvation_penalty: float | None = None,
+        # 蛇占满棋盘时的终止奖励；None 表示使用 profile 默认值。
         win_reward: float | None = None,
+        # 每个适用移动产生的固定成本，应为非正数；None 表示使用 profile 默认值。
         step_penalty: float | None = None,
+        # 饥饿成本系数，实际成本为 -scale * hunger_ratio**2；None 表示使用 profile 默认值。
         hunger_penalty_scale: float | None = None,
     ) -> None:
         profile = get_reward_config(reward_profile)
@@ -299,10 +312,12 @@ class SnakeEnv:
             self.hunger_ratio,
         ]
 
+    # 返回网格状态 grid observation 的形状
     @property
     def grid_state_shape(self) -> tuple[int, int, int]:
         return self.grid_channels, self.height, self.width
 
+    # 返回当前局面对应的网格状态，适合 CNN 输入。
     def get_grid_state(self) -> GridState:
         # 通道顺序固定为：边界、蛇身、蛇头、蛇尾、食物、蛇身顺序。
         # float32 连续数组可被 torch.from_numpy 直接读取，避免递归转换 Python 嵌套列表。
@@ -341,19 +356,20 @@ class SnakeEnv:
         grid[7, self.food.y, self.food.x] = 1.0
         return grid
 
+    # Hybrid 模式同时提供完整网格和 20 维人工特征，在 Q 网络展平后拼接。
     def get_hybrid_state(self) -> HybridState:
-        # Hybrid 模式同时提供完整网格和 20 维人工特征，在 Q 网络展平后拼接。
         return self.get_grid_state(), self.get_state()
 
+    # 统一 observation 出口，使 reset() 和 step() 与训练选择的模式保持一致。
     def _get_observation(self) -> Observation:
-        # 统一 observation 出口，使 reset() 和 step() 与训练选择的模式保持一致。
+
         if self.state_mode == "grid":
             return self.get_grid_state()
         if self.state_mode == "hybrid":
             return self.get_hybrid_state()
         return self.get_state()
 
-    # 判断是否撞墙或者吃到蛇自己。这里是严格判断，会把当前尾巴也算作身体。
+    # 判断是否撞墙或者吃到蛇自己。
     def is_collision(self, point: Point) -> bool:
         hits_wall = point.x < 0 or point.x >= self.width or point.y < 0 or point.y >= self.height
         hits_body = point in self.snake[1:]
@@ -373,34 +389,51 @@ class SnakeEnv:
 
     @property
     def starvation_limit(self) -> int:
+        # 棋盘面积是允许连续未进食步数的基础上限。
         board_area = self.width * self.height
+        # reference 模式会在棋盘面积上加当前蛇长，蛇越长，寻找食物的宽限步数越多。
         if self.starvation_limit_mode == "board_area_plus_snake_length":
             return board_area + len(self.snake)
+        # board_area 模式只使用棋盘面积作为上限。
         return board_area
 
     @property
     def hunger_ratio(self) -> float:
+        # 关闭饿死机制时不累计饥饿程度，因此饥饿成本始终为 0。
         if not self.starvation_enabled:
             return 0.0
+        # 用连续未进食步数除以饿死上限，并封顶为 1.0，得到范围为 [0, 1] 的饥饿比例。
         return min(self.steps_since_food / self.starvation_limit, 1.0)
 
     def _get_info(self) -> dict[str, InfoValue]:
+        # 返回当前环境状态和最近一步的奖励明细，供训练、评估与日志记录使用。
         return {
+            # 当前得分，即本局已经吃到的食物数量。
             "score": self.score,
+            # 本局从 reset() 后累计执行的步数。
             "steps": self.frame_iteration,
+            # 当前蛇身占用的格子数量，包括蛇头。
             "snake_length": len(self.snake),
+            # 距离上一次吃到食物已经经过的步数。
             "steps_since_food": self.steps_since_food,
+            # 最近一步因吃到食物获得的奖励。
             "reward_food": self.last_reward_components["food"],
+            # 最近一步因靠近或远离食物产生的进度奖励。
             "reward_progress": self.last_reward_components["progress"],
+            # 最近一步产生的固定步成本。
             "reward_step": self.last_reward_components["step"],
+            # 最近一步根据饥饿程度产生的饥饿成本。
             "reward_hunger": self.last_reward_components["hunger"],
+            # 最近一步因碰撞、饿死或获胜产生的终局奖励或惩罚。
             "reward_terminal": self.last_reward_components["terminal"],
+            # 最近一步所有奖励分量相加后的总奖励。
             "reward_total": self._total_reward(),
+            # 本局结束的原因；尚未结束时为 "none"。
             "termination_reason": self.termination_reason,
         }
 
+    # 用于获取当前环境最终采用的完整奖励配置
     def get_reward_settings(self) -> dict[str, bool | float | str | None]:
-        """Return the fully resolved reward semantics for experiment records."""
 
         return {
             "profile": self.reward_profile,
@@ -422,6 +455,7 @@ class SnakeEnv:
             "historical_source_revision": self.historical_source_revision,
         }
 
+    # 静态方法，把所有奖励分量初始化为 0.0
     @staticmethod
     def _empty_reward_components() -> dict[str, float]:
         return {
@@ -524,7 +558,6 @@ class SnakeEnv:
                 return distance / max_distance
         return 1.0
 
-    # 调用静态方法：不需要创建实例，直接用 类名.方法名() 就能用
     # 因为它不需要访问当前环境对象 self 里的任何状态
     # 这个方法根据当前方向和转向，计算新的绝对方向
     @staticmethod

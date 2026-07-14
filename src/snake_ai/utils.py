@@ -2,9 +2,22 @@ from __future__ import annotations
 
 import os
 import random
+import statistics
 
 import numpy as np
 import torch
+
+
+def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
+    """返回数值序列的均值、标准差、最小值、最大值和最后一个值。"""
+
+    return {
+        "mean": statistics.fmean(values),
+        "std": statistics.pstdev(values) if len(values) > 1 else 0.0,
+        "min": float(min(values)),
+        "max": float(max(values)),
+        "last": float(values[-1]),
+    }
 
 
 def set_seed(seed: int = 42, deterministic: bool = True) -> None:

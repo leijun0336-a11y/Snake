@@ -34,10 +34,12 @@ class DQNAgent:
         epsilon_start: float = 1.0,
         # 最低探索率，防止后期完全不探索。
         epsilon_end: float = 0.01,
-        # 每局结束后 epsilon 的指数衰减系数；未启用线性衰减时使用。
-        epsilon_decay: float = 0.995,
-        # 线性衰减到 epsilon_end 需要的 episode 数；None 时保留指数衰减。
-        epsilon_decay_episodes: int | None = None,
+        # 是否使用指数衰减；False 表示使用线性衰减。
+        epsilon_exp_decay: bool = False,
+        # 每局结束后 epsilon 的指数衰减系数；仅在指数衰减模式下使用。
+        epsilon_exp_factor: float = 0.995,
+        # 线性衰减到 epsilon_end 需要的 episode 数。
+        epsilon_linear_episodes: int = 7500,
         # 每隔多少次学习步骤，把 policy_net 的参数复制一份给 target_net.
         target_update_interval: int = 1000,
         # 是否使用 Dueling DQN 架构，分离状态值和优势值。
@@ -74,8 +76,9 @@ class DQNAgent:
         self.epsilon_start = epsilon_start
         self.epsilon = epsilon_start
         self.epsilon_end = epsilon_end
-        self.epsilon_decay = epsilon_decay
-        self.epsilon_decay_episodes = epsilon_decay_episodes
+        self.epsilon_exp_decay = epsilon_exp_decay
+        self.epsilon_exp_factor = epsilon_exp_factor
+        self.epsilon_linear_episodes = epsilon_linear_episodes
         self.target_update_interval = target_update_interval
         self.dueling = dueling
         self.learn_steps = 0
@@ -185,14 +188,16 @@ class DQNAgent:
 
     # 逐渐减少随机探索，让智能体从“多尝试”过渡到“多利用已学到的策略”
     def decay_epsilon(self, episode: int | None = None) -> None:
-        if self.epsilon_decay_episodes is not None and episode is not None:
-            progress = min(max(episode, 0) / self.epsilon_decay_episodes, 1.0)
-            epsilon_range = self.epsilon_start - self.epsilon_end
-            self.epsilon = max(
-                self.epsilon_end, self.epsilon_start - epsilon_range * progress
-            )
+        if self.epsilon_exp_decay:
+            self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_exp_factor)
             return
-        self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        if episode is None:
+            raise ValueError("episode is required when using linear epsilon decay")
+        progress = min(max(episode, 0) / self.epsilon_linear_episodes, 1.0)
+        epsilon_range = self.epsilon_start - self.epsilon_end
+        self.epsilon = max(
+            self.epsilon_end, self.epsilon_start - epsilon_range * progress
+        )
 
     # 更新目标网络
     def update_target_network(self) -> None:
@@ -265,8 +270,9 @@ class DQNAgent:
             "epsilon_start": self.epsilon_start,
             "epsilon": self.epsilon,
             "epsilon_end": self.epsilon_end,
-            "epsilon_decay": self.epsilon_decay,
-            "epsilon_decay_episodes": self.epsilon_decay_episodes,
+            "epsilon_exp_decay": self.epsilon_exp_decay,
+            "epsilon_exp_factor": self.epsilon_exp_factor,
+            "epsilon_linear_episodes": self.epsilon_linear_episodes,
             # 已完成的神经网络更新次数，用于恢复目标网络同步节奏。
             "learn_steps": self.learn_steps,
             # 状态向量维度，方便加载时检查环境和模型是否匹配。
@@ -391,11 +397,20 @@ class DQNAgent:
         self.epsilon_start = float(checkpoint.get("epsilon_start", self.epsilon_start))
         self.epsilon = float(checkpoint.get("epsilon", self.epsilon_end))
         self.epsilon_end = float(checkpoint.get("epsilon_end", self.epsilon_end))
-        self.epsilon_decay = float(checkpoint.get("epsilon_decay", self.epsilon_decay))
-        checkpoint_decay_episodes = checkpoint.get(
-            "epsilon_decay_episodes", self.epsilon_decay_episodes
+        self.epsilon_exp_factor = float(
+            checkpoint.get(
+                "epsilon_exp_factor",
+                checkpoint.get("epsilon_decay", self.epsilon_exp_factor),
+            )
         )
-        self.epsilon_decay_episodes = (
-            None if checkpoint_decay_episodes is None else int(checkpoint_decay_episodes)
-        )
+        if "epsilon_exp_decay" in checkpoint:
+            self.epsilon_exp_decay = bool(checkpoint["epsilon_exp_decay"])
+        elif "epsilon_decay_episodes" in checkpoint:
+            # 旧 checkpoint 用线性周期是否为 None 隐式表示衰减策略。
+            self.epsilon_exp_decay = checkpoint["epsilon_decay_episodes"] is None
+        checkpoint_linear_episodes = checkpoint.get("epsilon_linear_episodes")
+        if checkpoint_linear_episodes is None:
+            checkpoint_linear_episodes = checkpoint.get("epsilon_decay_episodes")
+        if checkpoint_linear_episodes is not None:
+            self.epsilon_linear_episodes = int(checkpoint_linear_episodes)
         self.learn_steps = int(checkpoint.get("learn_steps", 0))

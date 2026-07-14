@@ -1,8 +1,30 @@
+import sys
 from pathlib import Path
 
 import pytest
 
-from snake_ai.evaluate import find_latest_checkpoint
+from snake_ai.evaluate import build_configs, find_latest_checkpoint, parse_args
+
+
+def test_build_configs_resolves_evaluation_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["evaluate.py"])
+
+    train_config, env_config = build_configs(parse_args())
+
+    assert train_config.seed == 42
+    assert env_config.width == 20
+    assert env_config.height == 20
+
+
+def test_build_configs_matches_environment_minimum_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["evaluate.py", "--height", "4"])
+
+    with pytest.raises(ValueError, match="at least 5"):
+        build_configs(parse_args())
 
 
 def test_find_latest_checkpoint_uses_latest_experiment_latest_pt(

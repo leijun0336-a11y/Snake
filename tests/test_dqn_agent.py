@@ -28,6 +28,32 @@ def test_grid_agent_outputs_action() -> None:
     assert action in (0, 1, 2)
 
 
+def test_epsilon_decay_strategies_are_explicit() -> None:
+    linear_agent = DQNAgent(
+        state_size=20,
+        action_size=3,
+        epsilon_start=1.0,
+        epsilon_end=0.0,
+        epsilon_exp_decay=False,
+        epsilon_linear_episodes=10,
+        seed=1,
+    )
+    linear_agent.decay_epsilon(5)
+    assert linear_agent.epsilon == pytest.approx(0.5)
+
+    exp_agent = DQNAgent(
+        state_size=20,
+        action_size=3,
+        epsilon_start=1.0,
+        epsilon_end=0.0,
+        epsilon_exp_decay=True,
+        epsilon_exp_factor=0.8,
+        seed=1,
+    )
+    exp_agent.decay_epsilon()
+    assert exp_agent.epsilon == pytest.approx(0.8)
+
+
 def test_grid_agent_crops_local_features_at_board_edge() -> None:
     agent = DQNAgent(
         state_size=(9, 6, 6),
@@ -94,6 +120,25 @@ def test_load_legacy_non_dueling_checkpoint(tmp_path) -> None:
     assert agent.act([0.0] * 11, training=False) in (0, 1, 2)
 
 
+def test_load_migrates_legacy_epsilon_decay_names(tmp_path) -> None:
+    checkpoint_path = tmp_path / "legacy_epsilon.pt"
+    source_agent = DQNAgent(state_size=11, action_size=3, seed=1)
+    source_agent.save(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint.pop("epsilon_exp_decay")
+    checkpoint.pop("epsilon_exp_factor")
+    checkpoint.pop("epsilon_linear_episodes")
+    checkpoint["epsilon_decay"] = 0.8
+    checkpoint["epsilon_decay_episodes"] = None
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded_agent = DQNAgent(state_size=11, action_size=3, seed=1)
+    loaded_agent.load(checkpoint_path)
+
+    assert loaded_agent.epsilon_exp_decay is True
+    assert loaded_agent.epsilon_exp_factor == 0.8
+
+
 def test_load_rejects_incompatible_state_size(tmp_path) -> None:
     checkpoint_path = tmp_path / "state_11.pt"
     old_agent = DQNAgent(state_size=11, action_size=3, seed=1)
@@ -132,6 +177,9 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
         cnn_output_channels=12,
         cnn_dilations=(1, 3),
         cnn_pool_size=(4, 4),
+        epsilon_exp_decay=True,
+        epsilon_exp_factor=0.8,
+        epsilon_linear_episodes=123,
         seed=1,
     )
     trained_agent.save(checkpoint_path)
@@ -149,6 +197,9 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     assert loaded_agent.cnn_output_channels == 12
     assert loaded_agent.cnn_dilations == (1, 3)
     assert loaded_agent.cnn_pool_size == (4, 4)
+    assert loaded_agent.epsilon_exp_decay is True
+    assert loaded_agent.epsilon_exp_factor == 0.8
+    assert loaded_agent.epsilon_linear_episodes == 123
 
 
 def test_save_embeds_resolved_run_config(tmp_path) -> None:

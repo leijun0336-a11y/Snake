@@ -10,7 +10,7 @@ from snake_ai.train import resolve_max_steps_per_episode
 def _training_args(
     *,
     reward_profile: str,
-    potential_reward: bool = False,
+    potential_reward: bool = True,
     no_cost_rewards: bool = False,
     max_steps_per_episode: int | None = None,
     gamma: float = 0.99,
@@ -150,25 +150,29 @@ def test_profile_step_limit_resolution_is_explicit() -> None:
     assert resolve_max_steps_per_episode(_training_args(reward_profile="experiment8")) is None
     assert (
         resolve_max_steps_per_episode(
+            _training_args(reward_profile="experiment8", potential_reward=False)
+        )
+        is None
+    )
+    assert (
+        resolve_max_steps_per_episode(
+            _training_args(
+                reward_profile="experiment8",
+                no_cost_rewards=True,
+                gamma=0.95,
+            )
+        )
+        is None
+    )
+    assert (
+        resolve_max_steps_per_episode(
             _training_args(reward_profile="reference", max_steps_per_episode=800)
         )
         == 800
     )
-
-
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"potential_reward": True}, "already enables potential"),
-        ({"no_cost_rewards": True}, "historical cost rewards"),
-        ({"max_steps_per_episode": 500}, "no independent training episode step limit"),
-        ({"gamma": 0.95}, "requires gamma=0.99"),
-    ],
-)
-def test_experiment8_rejects_configuration_drift(
-    overrides: dict[str, bool | float | int], message: str
-) -> None:
-    with pytest.raises(ValueError, match=message):
+    assert (
         resolve_max_steps_per_episode(
-            _training_args(reward_profile="experiment8", **overrides)
+            _training_args(reward_profile="experiment8", max_steps_per_episode=500)
         )
+        == 500
+    )

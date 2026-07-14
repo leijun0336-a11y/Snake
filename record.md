@@ -139,8 +139,9 @@ step cost -0.005
 |---|---:|
 | `epsilon_start` | 1.0 |
 | `epsilon_end` | 0.01 |
-| `epsilon_decay` | 0.995，线性衰减启用时不作为主调度 |
-| `epsilon_decay_episodes` | 7500 |
+| `epsilon_exp_decay` | False |
+| `epsilon_exp_factor` | 0.995，线性衰减模式下不作为主调度 |
+| `epsilon_linear_episodes` | 7500 |
 | 最终 epsilon | 0.01 |
 | `learn_steps` | 941170 |
 | hidden size | 256 |
@@ -192,7 +193,7 @@ uv run python -m snake_ai.train \
   --height 6 \
   --state-mode hybrid \
   --max-episodes 15000 \
-  --epsilon-decay-episodes 7500
+  --epsilon-linear-episodes 7500
 ```
 
 当时还需要满足：

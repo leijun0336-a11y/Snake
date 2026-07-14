@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import statistics
 import sys
 import time
 from dataclasses import asdict
@@ -20,7 +19,7 @@ from snake_ai.config import (
     TrainConfig,
 )
 from snake_ai.game import SnakeEnv
-from snake_ai.utils import set_seed
+from snake_ai.utils import set_seed, summarize_values
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -33,90 +32,49 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a DQN agent for Snake.")
     # 最大训练局数；早停没有触发时，训练最多跑到这个 episode。
     parser.add_argument("--max-episodes", type=int, default=TrainConfig.episodes)
-    parser.add_argument(
-        "--max-steps-per-episode",
-        type=int,
-        default=None,
-        help=(
-            "Override the profile's training episode step limit. The reference "
-            "profile defaults to 500; experiment8 is intentionally unlimited."
-        ),
-    )
+    # 限制蛇的最大步数，防止无限绕圈。
+    parser.add_argument("--max-steps-per-episode", type=int, default=None)
     # 是否带渲染训练, action="store_true"表示：启动脚本时写上--render则为True，不写默认为False
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
+    # 渲染游戏时每个格子的像素尺寸
     parser.add_argument("--cell-size", type=int, default=EnvConfig.cell_size)
     parser.add_argument("--fps", type=int, default=EnvConfig.fps)
     parser.add_argument("--checkpoint-dir", type=Path, default=CHECKPOINT_DIR)
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
-    parser.add_argument(
-        "--state-mode", choices=("vector", "grid", "hybrid"), default="vector"
-    )
-    parser.add_argument(
-        "--reward-profile",
-        choices=REWARD_PROFILE_NAMES,
-        default="reference",
-        help=(
-            "Named reward semantics. experiment8 exactly restores the historical "
-            "dqn_20260712_130642 reward and starvation behavior."
-        ),
-    )
-    parser.add_argument(
-        "--potential-reward",
-        action="store_true",
-        help="Enable potential-based food progress shaping (disabled by default).",
-    )
-    parser.add_argument(
-        "--no-cost-rewards",
-        action="store_true",
-        help="Disable per-step and hunger costs and use the baseline timeout penalty.",
-    )
+    # 选模型：全连接 Vector、卷积 Grid、混合 Hybrid
+    parser.add_argument("--state-mode", choices=("vector", "grid", "hybrid"), default="hybrid")
+    # 选奖励配置
+    parser.add_argument("--reward-profile", choices=REWARD_PROFILE_NAMES, default="experiment8")
+    # 是否使用势函数进度奖励，默认启用；可通过 --no-potential-reward 关闭(argparse内置方法)。
+    parser.add_argument("--potential-reward", action=argparse.BooleanOptionalAction, default=True)
+    # 是否关闭步成本和饥饿成本；关闭后饿死和碰撞的惩罚值统一。
+    parser.add_argument("--no-cost-rewards", action="store_true")
     # 完全确定性会让部分 CUDA 卷积/池化算子明显变慢；默认优先训练速度。
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
     parser.add_argument("--gamma", type=float, default=TrainConfig.gamma)
     parser.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate)
-    parser.add_argument(
-        "--replay-buffer-size", type=int, default=TrainConfig.replay_buffer_size
-    )
+    parser.add_argument("--replay-buffer-size", type=int, default=TrainConfig.replay_buffer_size)
     parser.add_argument("--epsilon-start", type=float, default=TrainConfig.epsilon_start)
     parser.add_argument("--epsilon-end", type=float, default=TrainConfig.epsilon_end)
-    parser.add_argument("--epsilon-decay", type=float, default=TrainConfig.epsilon_decay)
-    parser.add_argument(
-        "--epsilon-decay-episodes",
-        type=int,
-        default=TrainConfig.epsilon_decay_episodes,
-        help=(
-            "Linearly decay epsilon to epsilon-end over this many episodes. "
-            "Defaults to 50%% of the current max episodes. Set to 0 to use exponential "
-            "epsilon-decay instead."
-        ),
-    )
-    parser.add_argument(
-        "--target-update-interval",
-        type=int,
-        default=TrainConfig.target_update_interval,
-    )
+    # 是否采用指数衰减；默认关闭，即采用线性衰减。
+    parser.add_argument("--epsilon-exp-decay", action="store_true")
+    # 指数衰减系数；仅在启用 --epsilon-exp-decay 时生效。
+    parser.add_argument("--epsilon-exp-factor", type=float, default=TrainConfig.epsilon_exp_factor, metavar="FACTOR")
+    # epsilon 线性降至下限所用局数；默认取最大训练局数的一半。
+    parser.add_argument("--epsilon-linear-episodes", type=int, default=TrainConfig.epsilon_linear_episodes, metavar="N")
+    parser.add_argument("--target-update-interval",type=int,default=TrainConfig.target_update_interval)
     parser.add_argument("--hidden-size", type=int, default=TrainConfig.hidden_size)
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     # 这些参数只影响 Grid/Hybrid 的卷积主干，Vector baseline 会忽略它们。
     parser.add_argument("--cnn-channels", type=int, default=TrainConfig.cnn_channels)
-    parser.add_argument(
-        "--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels
-    )
-    parser.add_argument(
-        "--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations
-    )
-    parser.add_argument(
-        "--cnn-pool-size", type=int, nargs=2, default=TrainConfig.cnn_pool_size
-    )
+    parser.add_argument("--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels)
+    parser.add_argument("--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations)
+    parser.add_argument("--cnn-pool-size", type=int, nargs=2, default=TrainConfig.cnn_pool_size)
     # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
-    parser.add_argument(
-        "--early-stop",
-        action="store_true",
-        help="Enable patience/target based early stopping (disabled by default).",
-    )
+    parser.add_argument("--early-stop",action="store_true")
     # 至少训练多少局后，才允许早停判断生效。
     parser.add_argument("--min-episodes", type=int, default=5000)
     # 超过最小训练局数后，允许连续多少局没有有效提升。
@@ -128,47 +86,88 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# 统计列表的均值、标准差、最小值、最大值和最后一个值，返回字典
-def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
-    return {
-        "mean": statistics.fmean(values),
-        "std": statistics.pstdev(values) if len(values) > 1 else 0.0,
-        "min": float(min(values)),
-        "max": float(max(values)),
-        "last": float(values[-1]),
-    }
-
-
 def resolve_max_steps_per_episode(args: argparse.Namespace) -> int | None:
-    """Validate profile invariants and resolve its training episode step limit."""
 
     if args.max_steps_per_episode is not None and args.max_steps_per_episode < 1:
         raise ValueError("max_steps_per_episode must be at least 1")
+    if args.max_steps_per_episode is not None:
+        return args.max_steps_per_episode
     if args.reward_profile == "experiment8":
-        if args.potential_reward:
-            raise ValueError(
-                "experiment8 already enables potential reward; omit --potential-reward"
-            )
-        if args.no_cost_rewards:
-            raise ValueError(
-                "experiment8 requires its historical cost rewards; "
-                "--no-cost-rewards is incompatible"
-            )
-        if args.max_steps_per_episode is not None:
-            raise ValueError(
-                "experiment8 requires no independent training episode step limit; "
-                "omit --max-steps-per-episode"
-            )
-        if args.gamma != 0.99:
-            raise ValueError("experiment8 requires gamma=0.99 for its potential reward")
         return None
-    return (
-        TrainConfig.max_steps_per_episode
-        if args.max_steps_per_episode is None
-        else args.max_steps_per_episode
+    return TrainConfig.max_steps_per_episode
+
+
+def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
+    """校验训练参数、解析派生默认值，并构造最终配置。"""
+
+    max_episodes = args.max_episodes
+    if max_episodes < 1:
+        raise ValueError("max episodes must be at least 1")
+    max_steps_per_episode = resolve_max_steps_per_episode(args)
+    if args.width < 5 or args.height < 5:
+        raise ValueError("width and height must be at least 5")
+    if args.cell_size < 1 or args.fps < 1:
+        raise ValueError("cell_size and fps must be positive")
+    if args.batch_size < 1 or args.replay_buffer_size < args.batch_size:
+        raise ValueError("replay_buffer_size must be at least batch_size >= 1")
+    if not 0.0 <= args.gamma <= 1.0:
+        raise ValueError("gamma must be between 0 and 1")
+    if args.learning_rate <= 0.0:
+        raise ValueError("learning_rate must be positive")
+    if not 0.0 <= args.epsilon_end <= args.epsilon_start <= 1.0:
+        raise ValueError("epsilon values must satisfy 0 <= end <= start <= 1")
+    if not 0.0 < args.epsilon_exp_factor <= 1.0:
+        raise ValueError("epsilon_exp_factor must be in (0, 1]")
+    if args.epsilon_linear_episodes is not None and args.epsilon_linear_episodes < 1:
+        raise ValueError("epsilon_linear_episodes must be positive")
+    epsilon_linear_episodes = (
+        max(1, int(max_episodes * 0.5))
+        if args.epsilon_linear_episodes is None
+        else args.epsilon_linear_episodes
     )
+    if args.target_update_interval < 1 or args.hidden_size < 1:
+        raise ValueError("target_update_interval and hidden_size must be positive")
+    if args.min_episodes < 1:
+        raise ValueError("min_episodes must be at least 1")
+    if args.min_episodes > max_episodes:
+        raise ValueError("min_episodes must be less than or equal to max episodes")
+    if args.cnn_channels <= 0 or args.cnn_output_channels <= 0:
+        raise ValueError("CNN channel sizes must be positive")
+    if any(dilation <= 0 for dilation in args.cnn_dilations):
+        raise ValueError("cnn_dilations must contain positive integers")
+    if any(size <= 0 for size in args.cnn_pool_size):
+        raise ValueError("cnn_pool_size must contain positive integers")
+
+    train_config = TrainConfig(
+        episodes=max_episodes,
+        max_steps_per_episode=max_steps_per_episode,
+        batch_size=args.batch_size,
+        gamma=args.gamma,
+        learning_rate=args.learning_rate,
+        replay_buffer_size=args.replay_buffer_size,
+        epsilon_start=args.epsilon_start,
+        epsilon_end=args.epsilon_end,
+        epsilon_exp_decay=args.epsilon_exp_decay,
+        epsilon_exp_factor=args.epsilon_exp_factor,
+        epsilon_linear_episodes=epsilon_linear_episodes,
+        target_update_interval=args.target_update_interval,
+        hidden_size=args.hidden_size,
+        cnn_channels=args.cnn_channels,
+        cnn_output_channels=args.cnn_output_channels,
+        cnn_dilations=tuple(args.cnn_dilations),
+        cnn_pool_size=tuple(args.cnn_pool_size),
+        seed=args.seed,
+    )
+    env_config = EnvConfig(
+        width=args.width,
+        height=args.height,
+        cell_size=args.cell_size,
+        fps=args.fps,
+    )
+    return train_config, env_config
 
 
+# 在训练开始前，打印一份“训练会在什么条件下停止”的概览
 def print_stop_overview(args: argparse.Namespace, max_episodes: int) -> None:
     early_stop_enabled = args.early_stop
     patience_earliest_episode = max(args.min_episodes, args.patience + 1)
@@ -264,72 +263,8 @@ def format_train_report(
 
 def main() -> None:
     args = parse_args()
-    max_episodes = args.max_episodes
-    if max_episodes < 1:
-        raise ValueError("max episodes must be at least 1")
-    max_steps_per_episode = resolve_max_steps_per_episode(args)
-    if args.width < 4 or args.height < 4:
-        raise ValueError("width and height must be at least 4")
-    if args.cell_size < 1 or args.fps < 1:
-        raise ValueError("cell_size and fps must be positive")
-    if args.batch_size < 1 or args.replay_buffer_size < args.batch_size:
-        raise ValueError("replay_buffer_size must be at least batch_size >= 1")
-    if not 0.0 <= args.gamma <= 1.0:
-        raise ValueError("gamma must be between 0 and 1")
-    if args.learning_rate <= 0.0:
-        raise ValueError("learning_rate must be positive")
-    if not 0.0 <= args.epsilon_end <= args.epsilon_start <= 1.0:
-        raise ValueError("epsilon values must satisfy 0 <= end <= start <= 1")
-    if not 0.0 < args.epsilon_decay <= 1.0:
-        raise ValueError("epsilon_decay must be in (0, 1]")
-    if args.epsilon_decay_episodes is not None and args.epsilon_decay_episodes < 0:
-        raise ValueError("epsilon_decay_episodes must be non-negative")
-    epsilon_decay_episodes = (
-        max(1, int(max_episodes * 0.5))
-        if args.epsilon_decay_episodes is None
-        else args.epsilon_decay_episodes
-    )
-    if args.target_update_interval < 1 or args.hidden_size < 1:
-        raise ValueError("target_update_interval and hidden_size must be positive")
-    if args.min_episodes < 1:
-        raise ValueError("min_episodes must be at least 1")
-    if args.min_episodes > max_episodes:
-        raise ValueError("min_episodes must be less than or equal to max episodes")
-    if args.cnn_channels <= 0 or args.cnn_output_channels <= 0:
-        raise ValueError("CNN channel sizes must be positive")
-    if any(dilation <= 0 for dilation in args.cnn_dilations):
-        raise ValueError("cnn_dilations must contain positive integers")
-    if any(size <= 0 for size in args.cnn_pool_size):
-        raise ValueError("cnn_pool_size must contain positive integers")
-
-    train_config = TrainConfig(
-        episodes=max_episodes,
-        max_steps_per_episode=max_steps_per_episode,
-        batch_size=args.batch_size,
-        gamma=args.gamma,
-        learning_rate=args.learning_rate,
-        replay_buffer_size=args.replay_buffer_size,
-        epsilon_start=args.epsilon_start,
-        epsilon_end=args.epsilon_end,
-        epsilon_decay=args.epsilon_decay,
-        epsilon_decay_episodes=(
-            None if epsilon_decay_episodes == 0 else epsilon_decay_episodes
-        ),
-        target_update_interval=args.target_update_interval,
-        hidden_size=args.hidden_size,
-        cnn_channels=args.cnn_channels,
-        cnn_output_channels=args.cnn_output_channels,
-        cnn_dilations=tuple(args.cnn_dilations),
-        cnn_pool_size=tuple(args.cnn_pool_size),
-        seed=args.seed,
-    )
+    train_config, env_config = build_configs(args)
     set_seed(train_config.seed, deterministic=args.deterministic)
-    env_config = EnvConfig(
-        width=args.width,
-        height=args.height,
-        cell_size=args.cell_size,
-        fps=args.fps,
-    )
 
     # 假设你在 2026 年 7 月 7 日 下午 3 点 30 分 45 秒 执行了这行代码
     # 最后生成的 run_name 字符串就会是"dqn_20260707_153045"
@@ -367,8 +302,8 @@ def main() -> None:
         # 环境直接在 reset()/step() 中返回对应 observation，避免训练循环重复构造状态。
         state_mode=args.state_mode,
         reward_profile=args.reward_profile,
-        potential_reward=True if args.potential_reward else None,
-        cost_rewards=False if args.no_cost_rewards else None,
+        potential_reward=args.potential_reward,
+        cost_rewards=not args.no_cost_rewards,
         reward_gamma=train_config.gamma,
     )
     agent = DQNAgent(
@@ -391,10 +326,12 @@ def main() -> None:
         epsilon_start=train_config.epsilon_start,  
         # epsilon值的下界
         epsilon_end=train_config.epsilon_end,  
-        # epsilon的指数衰减系数；线性衰减关闭时使用。
-        epsilon_decay=train_config.epsilon_decay,
+        # 是否采用指数衰减；默认采用线性衰减。
+        epsilon_exp_decay=train_config.epsilon_exp_decay,
+        # epsilon 的指数衰减系数；仅在指数衰减模式下使用。
+        epsilon_exp_factor=train_config.epsilon_exp_factor,
         # 线性衰减到 epsilon_end 需要的 episode 数。
-        epsilon_decay_episodes=train_config.epsilon_decay_episodes,
+        epsilon_linear_episodes=train_config.epsilon_linear_episodes,
         # 隔多少步更新一次目标网络
         # Q训练网络更新一次视为一步，当经验池满后，则等价于贪吃蛇走一步
         target_update_interval=train_config.target_update_interval,   

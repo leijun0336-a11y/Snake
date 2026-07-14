@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import statistics
 import time
 from pathlib import Path
 
@@ -16,7 +15,7 @@ import torch
 from snake_ai.agents import DQNAgent
 from snake_ai.config import CHECKPOINT_DIR, RUNS_DIR, EnvConfig, TrainConfig
 from snake_ai.game import SnakeEnv
-from snake_ai.utils import set_seed
+from snake_ai.utils import set_seed, summarize_values
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -30,12 +29,9 @@ def parse_args() -> argparse.Namespace:
     # 不传时默认加载 checkpoints/<最新 dqn_*>/latest.pt；显式传入时使用用户指定路径。
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--episodes", type=int, default=1000)
-    parser.add_argument(
-        "--max-steps",
-        type=int,
-        default=1000,
-        help="Maximum total steps per evaluation episode (default: 1000).",
-    )
+    # 防止转圈。
+    parser.add_argument("--max-steps",type=int,default=1000)
+    # 不渲染，默认渲染。
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
@@ -51,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
+# 默认提取最近一次实验的 runs/dqn_YYYYMMDD_HHMMSS 目录，若没有则报错。
 def find_latest_run_dir(runs_dir: Path = RUNS_DIR) -> Path:
     # 训练脚本会生成 runs/dqn_YYYYMMDD_HHMMSS 目录，这里按目录名时间取最新的一个。
     run_dirs = [path for path in runs_dir.glob("dqn_*") if path.is_dir()]
@@ -60,8 +56,8 @@ def find_latest_run_dir(runs_dir: Path = RUNS_DIR) -> Path:
     return max(run_dirs, key=lambda path: path.name)
 
 
+# 默认提取最近一次实验的权重，权重默认取latest.pt，若没有latest.pt则取best.pt
 def find_latest_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
-    # 新训练会保存到 checkpoints/dqn_YYYYMMDD_HHMMSS/latest.pt，这里按目录名时间取最新模型。
     checkpoint_dirs = [path for path in checkpoint_dir.glob("dqn_*") if path.is_dir()]
     if not checkpoint_dirs:
         legacy_checkpoint = checkpoint_dir / "latest.pt"
@@ -78,23 +74,16 @@ def find_latest_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
     return latest_checkpoint
 
 
+# 确定评估结果的tensorboard文件存储在哪个文件夹下。
 def find_run_dir_for_checkpoint(checkpoint_path: Path, runs_dir: Path = RUNS_DIR) -> Path:
-    # 确定评估结果的tensorboard文件存储在哪个文件夹下。
+
     run_name = checkpoint_path.parent.name
     if run_name.startswith("dqn_"):
         return runs_dir / run_name
     return find_latest_run_dir(runs_dir)
 
 
-def summarize_values(values: list[int] | list[float]) -> dict[str, float]:
-    return {
-        "mean": statistics.fmean(values),
-        "std": statistics.pstdev(values) if len(values) > 1 else 0.0,
-        "min": float(min(values)),
-        "max": float(max(values)),
-    }
-
-
+# 把一次评估的统计结果整理成 Markdown 格式的文本报告，放入tensorboard的 text 标签页中。
 def format_eval_report(
     checkpoint_path: Path,
     episodes: int,
@@ -126,29 +115,39 @@ def format_eval_report(
     return "\n".join(lines)
 
 
+# 读取 checkpoint 中记录的状态输入模式。
 def get_checkpoint_state_mode(checkpoint_path: Path) -> str:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     return str(checkpoint.get("state_mode", "vector"))
 
 
-def main() -> None:
-    args = parse_args()
+# 校验评估参数并构造最终配置。
+def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
+
+
     if args.episodes < 1:
         raise ValueError("episodes must be at least 1")
     if args.max_steps < 1:
         raise ValueError("max_steps must be at least 1")
-    if args.width < 4 or args.height < 4:
-        raise ValueError("width and height must be at least 4")
+    if args.width < 5 or args.height < 5:
+        raise ValueError("width and height must be at least 5")
     if args.cell_size < 1 or args.fps < 1:
         raise ValueError("cell_size and fps must be positive")
+
     train_config = TrainConfig(seed=args.seed)
-    set_seed(train_config.seed)
     env_config = EnvConfig(
         width=args.width,
         height=args.height,
         cell_size=args.cell_size,
         fps=args.fps,
     )
+    return train_config, env_config
+
+
+def main() -> None:
+    args = parse_args()
+    train_config, env_config = build_configs(args)
+    set_seed(train_config.seed)
     
     # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 latest.pt。
     checkpoint_path = args.checkpoint or find_latest_checkpoint()

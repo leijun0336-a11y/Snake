@@ -9,23 +9,42 @@ RUNS_DIR = PROJECT_ROOT / "runs"
 
 @dataclass(frozen=True)
 class RewardConfig:
-    """A named, immutable reward/environment-semantics profile."""
+    """一组完整的奖励语义配置，用于复现不同训练实验的奖励行为。"""
 
+    # 奖励配置名称，也是命令行选择 reward profile 时使用的标识。
     name: str
+    # 是否启用势函数进度奖励：beta * (gamma * new_phi - old_phi)。
+    # old_phi 和 new_phi 分别为移动前后棋盘状态的势函数值，gamma 为折扣因子。
     potential_reward: bool
+    # 是否启用步成本和饥饿成本；开启时饿死使用 starvation_penalty，不同于撞死的数值。
+    # 关闭时饿死和撞死的惩罚相同。
     cost_rewards: bool
+    # 势函数进度奖励的缩放系数 beta，必须为非负数。
     progress_beta: float
+    # 吃到食物时获得的奖励。
     food_reward: float
+    # 蛇头撞墙或撞到身体时的终止惩罚。
     collision_penalty: float
+    # 超过无进食步数上限时的终止惩罚；仅在 cost_rewards 开启时使用。
     starvation_penalty: float
+    # 蛇占满棋盘时获得的终止奖励。
     win_reward: float
+    # 每个适用移动产生的固定时间成本，应为非正数。
     step_penalty: float
+    # 饥饿成本系数，实际成本为 -scale * hunger_ratio**2。
+    # hunger_ratio= min(steps_since_food / starvation_limit, 1.0)
     hunger_penalty_scale: float
+    # 步成本的作用范围：ordinary_move 不含吃食物，all_legal_moves 含所有合法移动。
     step_cost_scope: str
+    # 饿死时的成本处理：replace 清除本步成本，accumulate 保留并叠加终止惩罚。
     terminal_cost_mode: str
+    # 饿死的标准：board_area 使用棋盘面积，board_area_plus_snake_length 再加蛇长。
     starvation_limit_mode: str
+    # 触发饿死的边界比较：gt 表示大于上限，gte 表示大于或等于上限。
     starvation_comparison: str
+    # 进度奖励语义版本；legacy_food_target 表示本步始终以移动前的食物为目标计算。
     progress_mode: str = "legacy_food_target"
+    # 历史配置所依据的源码git提交；当前配置或无特定来源时为 None。
     historical_source_revision: str | None = None
 
 
@@ -68,7 +87,7 @@ EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     historical_source_revision="62ff05d5a8d7b65472a984e56647f2c20bceb915",
 )
 
-
+# 把所有奖励配置整理成一个“按名称查找配置”的字典，并生成所有可用配置名称。
 REWARD_CONFIGS = {
     config.name: config
     for config in (REFERENCE_REWARD_CONFIG, EXPERIMENT8_REWARD_CONFIG)
@@ -76,8 +95,8 @@ REWARD_CONFIGS = {
 REWARD_PROFILE_NAMES = tuple(REWARD_CONFIGS)
 
 
+# 根据奖励配置名称，返回对应的 RewardConfig 对象
 def get_reward_config(name: str) -> RewardConfig:
-    """Return a known profile and fail explicitly for unknown names."""
 
     try:
         return REWARD_CONFIGS[name]
@@ -104,12 +123,18 @@ class TrainConfig:
     replay_buffer_size: int = 100_000
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
-    epsilon_decay: float = 0.995
-    epsilon_decay_episodes: int | None = None
+    # 是否使用指数衰减；False 表示使用线性衰减。
+    epsilon_exp_decay: bool = False
+    # 指数衰减模式下，每局结束后 epsilon 乘以的系数。
+    epsilon_exp_factor: float = 0.995
+    # 线性衰减到 epsilon_end 所用局数；None 表示训练时取最大局数的一半。
+    epsilon_linear_episodes: int | None = None
     target_update_interval: int = 1000
     hidden_size: int = 256
     cnn_channels: int = 32
     cnn_output_channels: int = 8
+    # 三个卷积块中对应的膨胀率，分别为 1、1、2。
     cnn_dilations: tuple[int, ...] = (1, 1, 2)
+    # 平均池化后的高宽
     cnn_pool_size: tuple[int, int] = (10, 10)
     seed: int = 42

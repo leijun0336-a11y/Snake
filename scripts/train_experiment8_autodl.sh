@@ -26,8 +26,7 @@ uv run python -m snake_ai.train \
     --replay-buffer-size 100000 \
     --epsilon-start 1.0 \
     --epsilon-end 0.01 \
-    --epsilon-decay 0.995 \
-    --epsilon-decay-episodes 7500 \
+    --epsilon-linear-episodes 7500 \
     --target-update-interval 1000 \
     --hidden-size 256 \
     --cnn-channels 32 \
