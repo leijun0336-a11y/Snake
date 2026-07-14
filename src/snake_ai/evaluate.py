@@ -92,6 +92,7 @@ def format_eval_report(
     steps: list[int],
     score_per_steps: list[float],
     max_lengths: list[int],
+    full_score: int,
 ) -> str:
     summaries = {
         "score": summarize_values(scores),
@@ -99,6 +100,8 @@ def format_eval_report(
         "score_per_step": summarize_values(score_per_steps),
         "max_snake_length": summarize_values(max_lengths),
     }
+    full_games = sum(1 for score in scores if score >= full_score)
+    full_rate = full_games / episodes if episodes > 0 else 0.0
     lines = [
         f"Checkpoint: `{checkpoint_path}`",
         f"Episodes: `{episodes}`",
@@ -112,6 +115,16 @@ def format_eval_report(
             f"| {name} | {summary['mean']:.4f} | {summary['std']:.4f} | "
             f"{summary['min']:.4f} | {summary['max']:.4f} |"
         )
+    lines.extend(
+        [
+            "",
+            "| Full Score Metric | Value |",
+            "|---|---:|",
+            f"| full_score | {full_score} |",
+            f"| full_games | {full_games} / {episodes} |",
+            f"| full_rate | {full_rate * 100:.2f}% |",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -214,6 +227,9 @@ def main() -> None:
     # 加载模型参数用于测试
     agent.load(checkpoint_path)
 
+    # 动态计算满分：棋盘总格数减去 reset 后的初始蛇长。
+    full_score = env.width * env.height - len(env.snake)
+
     scores: list[int] = []
     steps: list[int] = []
     max_lengths: list[int] = []
@@ -247,7 +263,7 @@ def main() -> None:
             state = env.reset()
             done = False
             info = {"score": 0}
-            # 每局开始时蛇身长度为3(初始值)，后续吃到食物会增长
+            # 每局开始时记录 reset 后的初始蛇长，后续吃到食物会增长
             max_snake_length = len(env.snake)
             evaluation_steps = 0
 
@@ -312,6 +328,11 @@ def main() -> None:
                 csv_file.flush()
         if scores and writer is not None:
             total_time_sec = time.perf_counter() - eval_start_time
+            full_games = sum(1 for score in scores if score >= full_score)
+            full_rate = full_games / len(scores)
+            writer.add_scalar("eval_summary/full_score", full_score, len(scores))
+            writer.add_scalar("eval_summary/full_games", full_games, len(scores))
+            writer.add_scalar("eval_summary/full_rate", full_rate, len(scores))
             writer.add_text(
                 "eval/report",
                 format_eval_report(
@@ -322,6 +343,7 @@ def main() -> None:
                     steps=steps,
                     score_per_steps=score_per_steps,
                     max_lengths=max_lengths,
+                    full_score=full_score,
                 ),
                 global_step=len(scores),
             )
@@ -338,10 +360,14 @@ def main() -> None:
         avg_steps = sum(steps) / len(steps)
         avg_eff = sum(score_per_steps) / len(score_per_steps)
         avg_max_len = sum(max_lengths) / len(max_lengths)
+        full_games = sum(1 for score in scores if score >= full_score)
+        full_rate = full_games / len(scores)
         print(
             f"average_score={avg_score:.2f}  best_score={max(scores)}  "
             f"avg_steps={avg_steps:.1f}  avg_eff={avg_eff:.4f}  "
-            f"avg_max_len={avg_max_len:.2f}"
+            f"avg_max_len={avg_max_len:.2f}  "
+            f"full_score={full_score}  full_games={full_games}/{len(scores)}  "
+            f"full_rate={full_rate * 100:.2f}%"
         )
 
 
