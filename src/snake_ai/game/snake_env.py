@@ -47,8 +47,8 @@ class SnakeEnv:
         # 是否创建渲染器并显示游戏画面。
         render_mode: bool = False,
         # 渲染时每个棋盘格的边长，单位为像素。
-        cell_size: int = 24,
-        fps: int = 30,
+        cell_size: int = 48,
+        fps: int = 20,
         seed: int | None = None,
         # observation 模式：vector、grid 或 hybrid。
         state_mode: str = "vector",

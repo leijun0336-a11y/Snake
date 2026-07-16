@@ -48,7 +48,7 @@ class RewardConfig:
     historical_source_revision: str | None = None
 
 
-# 与 chynl/snake 对齐后的当前基线。保持为默认 profile，避免旧调用静默改变行为。
+# 基线奖励配置
 REFERENCE_REWARD_CONFIG = RewardConfig(
     name="reference",
     potential_reward=False,
@@ -67,7 +67,7 @@ REFERENCE_REWARD_CONFIG = RewardConfig(
 )
 
 
-# 第八次实验 dqn_20260712_130642 的原始语义。
+# 第八次实验 dqn_20260712_130642 的奖励配置(目前最优)。
 # 源码证据对应后来提交为 62ff05d 的工作树；不能把这些历史边界“修正”为当前语义。
 EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     name="experiment8",
@@ -80,10 +80,15 @@ EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     win_reward=20.0,
     step_penalty=-0.005,
     hunger_penalty_scale=0.02,
+    # 步成本作用范围为所有合法移动，包含吃食物的移动。
     step_cost_scope="all_legal_moves",
+    # 蛇饿死时，保留这一普通移动产生的步成本和饥饿成本，再叠加饿死惩罚。
     terminal_cost_mode="accumulate",
+    # 蛇连续未吃到食物的步数上限，等于棋盘的总格子数。
     starvation_limit_mode="board_area",
+    # 饿死的边界比较为大于上限，等于上限时不算饿死。
     starvation_comparison="gt",
+    # 用来记录这套历史奖励配置所依据的 Git 源码版本的commit id.
     historical_source_revision="62ff05d5a8d7b65472a984e56647f2c20bceb915",
 )
 
@@ -109,8 +114,8 @@ def get_reward_config(name: str) -> RewardConfig:
 class EnvConfig:
     width: int = 20
     height: int = 20
-    cell_size: int = 24
-    fps: int = 30
+    cell_size: int = 48
+    fps: int = 20
 
 
 @dataclass(frozen=True)

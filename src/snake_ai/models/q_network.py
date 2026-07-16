@@ -5,8 +5,9 @@ from torch import nn
 from torch.nn import functional as F
 
 
+# 返回不超过 preferred、并且能够整除 channels 的最大 GroupNorm 组数。
 def _group_count(channels: int, preferred: int) -> int:
-    """返回不超过 preferred、并且能够整除 channels 的最大 GroupNorm 组数。"""
+    
     # GroupNorm 要求通道数能够被组数整除。这个辅助函数让自定义 8、12、16、32
     # 等通道数都能找到合法配置，而不是把组数硬编码成 8 或 4。
     for groups in range(min(channels, preferred), 0, -1):
@@ -101,10 +102,12 @@ class QNetwork(nn.Module):
             if channels < self.HEAD_CHANNEL_SLICE.stop:
                 raise ValueError("grid input must contain the four directional head channels")
 
+            # ===============主干部分==============
             # 共享 CNN 主干不进行下采样：9通道输入先映射到32通道，默认再经过
             # dilation=(1,1,2) 的三个残差块，输出仍为 [B,32,H,W]。
             backbone: list[nn.Module] = [
                 nn.Conv2d(channels, cnn_channels, kernel_size=3, padding=1, bias=False),
+                # GroupNorm 的两个参数分别是组数和通道数，组数必须能整除通道数。
                 nn.GroupNorm(_group_count(cnn_channels, 8), cnn_channels),
                 nn.ReLU(),
             ]
@@ -114,8 +117,9 @@ class QNetwork(nn.Module):
             )
             self.cnn = nn.Sequential(*backbone)
 
-            # 全局和局部分支分别使用自己的 1x1 投影层。两者不共享权重，使全局
-            # 分支可以侧重布局，局部分支可以侧重蛇头附近的墙和身体。
+            
+            # =============分支部分==============
+            # 全局和局部分支分别使用自己的 1x1 投影层。两者不共享权重，使全局分支可以侧重布局，局部分支可以侧重蛇头附近的墙和身体。
             branch_groups = _group_count(cnn_output_channels, 4)
             self.global_projection = nn.Sequential(
                 nn.Conv2d(cnn_channels, cnn_output_channels, kernel_size=1, bias=False),
@@ -135,8 +139,9 @@ class QNetwork(nn.Module):
             global_size = cnn_output_channels * height * width
             local_size = cnn_output_channels * self.LOCAL_CROP_SIZE**2
             fused_size = global_size + local_size
+            
+            # Hybrid 继续拼接固定长度的人工状态，最终维度为 8*H*W+220（默认配置）。
             if state_mode == "hybrid":
-                # Hybrid 继续拼接固定长度的人工状态，最终维度为 8*H*W+220（默认配置）。
                 fused_size += auxiliary_size
             self.feature = nn.Sequential(
                 nn.Linear(fused_size, hidden_size),
@@ -144,6 +149,7 @@ class QNetwork(nn.Module):
             )
             feature_size = hidden_size
 
+        # ===============全连接层部分的选择==============
         if not dueling:
             # 关闭 Dueling 时直接从共享特征预测每个动作的 Q 值。
             self.head = nn.Linear(feature_size, output_size)
@@ -195,7 +201,10 @@ class QNetwork(nn.Module):
             self.LOCAL_CROP_SIZE,
         )
 
+    # 把两个CNN分支拉成一条向量。
     def _spatial_features(self, grid: torch.Tensor) -> torch.Tensor:
+        # grid 的高宽由 --width/--height 决定。
+        
         # 共享特征保持实际 HxW 分辨率，两个分支从同一语义特征图出发。
         shared = self.cnn(grid)
         # 全局分支：[B,32,H,W] -> [B,8,H,W] -> [B,8*H*W]。
@@ -215,6 +224,7 @@ class QNetwork(nn.Module):
             features = torch.cat(
                 (self._spatial_features(grid), auxiliary_state), dim=1
             )
+            # mlp到hidden_size维共享特征。
             features = self.feature(features)
         elif self.state_mode == "grid":
             # 纯 Grid 不再提供 hunger 旁路，只使用9通道空间状态。
@@ -225,7 +235,10 @@ class QNetwork(nn.Module):
 
         if not self.dueling:
             return self.head(features)
+        
+        # dueling DQN 的两个分支的输出。
         value = self.value_stream(features)
         advantage = self.advantage_stream(features)
+        
         # 减去动作优势均值可消除 V 与 A 的不可辨识常数偏移。
         return value + advantage - advantage.mean(dim=1, keepdim=True)

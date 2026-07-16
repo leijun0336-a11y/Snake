@@ -48,3 +48,16 @@ bash scripts/train_autodl.sh --state-mode grid --deterministic
 2. 在默认 `20x20 -> 5x5` 这种整除池化场景下，把 `AdaptiveAvgPool2d` 替换成等价的 `AvgPool2d`，避开 `adaptive_avg_pool2d_backward_cuda` 的慢路径和警告。
 
 3. 保留数据路径优化作为辅助优化：Grid 状态使用连续 `float32` NumPy 数组；ReplayBuffer 使用固定容量环形列表并按随机索引采样，避免 `random.sample(list(self.memory), 64)` 在经验池很大时每步复制整个 buffer。
+
+
+# 问题
+
+背景：使用裁剪CNN特征图的方式获取局部信息。
+
+训练时发现是否开启--deterministic 参数训练时长有数倍的差异。通常情况下不会造成如此大的速度差异。
+
+解决过程：
+
+解了 deterministic 参数。在多线程并发的情况下，底层算子(即一次计算操作)之间的执行顺序不同往往导致不同的计算结果(例如浮点数运算就不严格满足结合律)，这就导致即使固定随机数种子也无法保证完全可复现。而 deterministic 参数就是把这个顺序给固定住。但如果固定顺序，并发度就会降低(因为原本是“谁快谁先上”)。
+
+原因是蛇的头附近的局部特征图裁剪的过程中用到了unfold方法实现局部裁剪。让unfold进行滑动窗口生成 w * h 个窗口信息但只挑出其中一个做真正的反向传播，而其他无用的窗口并非不做反向传播，而是传回梯度0. 同一个元素需要多个窗口的梯度加到一起，比如对于某一个特征，梯度更新为 a + b + c + 0 + 0 +0 + 0 + 0 + 0 + 0 + 0 + 0，这里涉及了多次累加，不仅拖慢反向传播速度，还容易触发 deterministic 的触发，触发次数过多导致 deterministic 比没有 deterministic 的情况慢很多。

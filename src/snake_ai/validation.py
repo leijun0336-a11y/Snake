@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 from snake_ai.game import SnakeEnv
 
 
+# 指定的验证集名称。
 SeedSetName = Literal["quick", "confirmation", "final"]
 
 SEED_SET_STRIDE = 1_000_000
@@ -20,6 +21,7 @@ SEED_SET_INDEX: dict[SeedSetName, int] = {
 }
 
 
+#  规定“符合要求的智能体”必须具备哪些属性和方法。
 class GreedyAgent(Protocol):
     policy_net: Any
 
@@ -55,10 +57,13 @@ class ValidationResult:
     timeout_rate: float
     total_time_sec: float
 
+    # 把当前的 dataclass 对象转换成普通 Python 字典。
+    # 保存 checkpoint 的 metadata 需要使用普通的数据结构。
     def to_dict(self) -> dict[str, int | float | str]:
         return asdict(self)
 
 
+# 验证选拔标准的配置
 @dataclass(frozen=True)
 class SelectionThresholds:
     quick_mean_delta: float = 0.25
@@ -71,7 +76,7 @@ class SelectionThresholds:
 
 DEFAULT_SELECTION_THRESHOLDS = SelectionThresholds()
 
-
+# 验证阶段的事件记录
 @dataclass(frozen=True)
 class ValidationEvent:
     stage: str
@@ -80,6 +85,7 @@ class ValidationEvent:
     promoted_to_best: bool
 
 
+# 验证阶段擂主的记录
 @dataclass
 class StagedValidationState:
     selection_start_episode: int | None = None
@@ -91,17 +97,19 @@ class StagedValidationState:
 
 @dataclass(frozen=True)
 class StagedValidationDecision:
+    # 本轮分阶段验证产生的事件集合。比如当前这一局既进行了快速验证，又进行了确认验证，那么 events 就会包含两个 ValidationEvent 对象。
+    # 一个长度不限的元组，并且每个元素都是 ValidationEvent.
+    # ... 不是省略方法实现，而是元组类型语法，表示前面的元素类型可以重复任意次。
     events: tuple[ValidationEvent, ...] = ()
     best_updated: bool = False
     stop_reason: Literal["target_validation", "validation_patience"] | None = None
 
-
+# 不同的验证阶段使用不同的随机种子
 def make_episode_seeds(
     base_seed: int,
     seed_set: SeedSetName,
     episodes: int,
 ) -> tuple[int, ...]:
-    """Build stable, non-overlapping per-episode seed sets."""
 
     if episodes < 1:
         raise ValueError("validation episodes must be at least 1")
@@ -109,14 +117,21 @@ def make_episode_seeds(
         raise ValueError(
             f"validation episodes must be less than {SEED_SET_STRIDE} to keep seed sets disjoint"
         )
+    
+    # 种子计算方法：基础种子值+之前定义的种子集合索引*步长
     start = base_seed + SEED_SET_INDEX[seed_set] * SEED_SET_STRIDE
+    # 返回一个元组，包含从 start 开始的连续整数，长度为 episodes
+    # 例如，如果 base_seed=1000, seed_set='quick', episodes=5, 那么返回的元组将是 (1000000, 1000001, 1000002, 1000003, 1000004)
+    # 一次验证中每个episode使用不同的种子，因为一局中两条蛇吃到的食物数量可能不同，导致消耗的随机数也不同。因此每个episode都要同步一下。
     return tuple(range(start, start + episodes))
 
 
+# 判断当前 epsilon 是否已经下降到最低值附近。如果epsilon到达下限则开始验证和选拔最佳模型。
 def epsilon_at_floor(epsilon: float, epsilon_end: float, tolerance: float = 1e-8) -> bool:
     return epsilon <= epsilon_end + tolerance
 
 
+# 判断当前训练 episode 是否到了“定期验证”的时间点。
 def should_run_periodic_validation(
     episode: int,
     selection_start_episode: int,
@@ -127,6 +142,7 @@ def should_run_periodic_validation(
     return episode > selection_start_episode and (episode - selection_start_episode) % interval == 0
 
 
+# 更新“连续多少轮验证没有产生更好的模型”的计数器。
 def next_validation_patience(
     current_rounds: int,
     *,
@@ -140,14 +156,20 @@ def next_validation_patience(
     return 0 if promoted else current_rounds + 1
 
 
+# 判断“连续没有改进的验证轮数”是否已经达到早停上限。
 def validation_patience_exhausted(current_rounds: int, patience: int) -> bool:
     if patience < 1:
         raise ValueError("validation patience must be at least 1")
     return current_rounds >= patience
 
 
+# 分阶段验证调度器
+# 是否进行快速验证
+# 是否继续进行确认验证
+# 当前模型是否成为新的最佳模型
+# 是否因为达到目标或长期无改进而停止训练
 def run_staged_validation(
-    *,
+    *,            # `*` 后面的参数必须通过“参数名=值”的方式传入。
     episode: int,
     epsilon: float,
     epsilon_end: float,
@@ -160,7 +182,6 @@ def run_staged_validation(
     target_mean_score: float | None,
     thresholds: SelectionThresholds = DEFAULT_SELECTION_THRESHOLDS,
 ) -> StagedValidationDecision:
-    """Advance best selection and early stopping by one training episode."""
 
     if state.selection_start_episode is None:
         if not epsilon_at_floor(epsilon, epsilon_end):
@@ -252,7 +273,9 @@ def run_staged_validation(
             best_updated=best_updated,
         )
 
-    # If quick screening skipped confirmation, perform the mandatory final check.
+    # 如果本轮 quick 快速筛选没有通过，因此跳过了 confirmation 验证，
+    # 但训练又准备因为长期无改进而早停，那么停止前必须补做一次 confirmation 验证。
+    # 相当于即将早停前给最后一次机会。
     if confirmation is None:
         confirmation = evaluator("confirmation")
         promoted = passes_confirmation(
@@ -291,6 +314,8 @@ def run_staged_validation(
     )
 
 
+# 判断当前候选模型是否通过快速筛选，获得进入 confirmation 确认验证的资格。
+# 被调度器函数调用。
 def passes_quick_screen(
     candidate: ValidationResult,
     incumbent: ValidationResult,
@@ -305,6 +330,8 @@ def passes_quick_screen(
     )
 
 
+# 判断候选模型是否通过正式确认验证，并取代当前最佳模型。
+# 被调度器函数调用。
 def passes_confirmation(
     candidate: ValidationResult,
     incumbent: ValidationResult,
@@ -319,6 +346,8 @@ def passes_confirmation(
     )
 
 
+# 让当前模型在固定的一组随机种子下，以纯贪心策略运行多局游戏，并汇总评估指标。
+# 被调度器函数调用。
 def evaluate_policy(
     agent: GreedyAgent,
     env: SnakeEnv,
@@ -414,6 +443,7 @@ def evaluate_policy(
     )
 
 
+# 比赛前检查双方是否使用了相同赛制。
 def _require_comparable(
     candidate: ValidationResult,
     incumbent: ValidationResult,
@@ -435,6 +465,7 @@ def _gte(left: float, right: float) -> bool:
     return left + COMPARISON_EPSILON >= right
 
 
+# 把当前候选模型登记为新的最佳模型。
 def _promote(
     state: StagedValidationState,
     episode: int,

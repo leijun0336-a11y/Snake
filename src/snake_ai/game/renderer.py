@@ -5,7 +5,10 @@ from snake_ai.game.snake_env import Point
 
 
 class SnakeRenderer:
-    def __init__(self, width: int, height: int, cell_size: int = 24, fps: int = 30) -> None:
+    SNAKE_GAP = 8
+    FOOD_GAP = 10
+
+    def __init__(self, width: int, height: int, cell_size: int = 48, fps: int = 20) -> None:
         # pygame 只在真正开启渲染时导入，避免无渲染训练时强依赖窗口环境。
         import pygame
 
@@ -91,11 +94,13 @@ class SnakeRenderer:
 
     # 绘制食物，食物位置由网格坐标 food 决定。
     def _draw_food(self, food: Point) -> None:
-        self.pygame.draw.rect(self.screen, (230, 70, 70), self._cell_rect(food).inflate(-6, -6))
+        food_rect = self._cell_rect(food).inflate(-self.FOOD_GAP, -self.FOOD_GAP)
+        self.pygame.draw.rect(self.screen, (230, 70, 70), food_rect)
 
     # 绘制蛇；snake[0] 是蛇头，其余是身体。
     def _draw_snake(self, snake: list[Point]) -> None:
         for index, point in enumerate(snake):
             # 蛇头颜色更亮，身体颜色稍暗。
             color = (80, 210, 120) if index == 0 else (55, 160, 95)
-            self.pygame.draw.rect(self.screen, color, self._cell_rect(point).inflate(-4, -4))
+            snake_rect = self._cell_rect(point).inflate(-self.SNAKE_GAP, -self.SNAKE_GAP)
+            self.pygame.draw.rect(self.screen, color, snake_rect)

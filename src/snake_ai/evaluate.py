@@ -248,7 +248,11 @@ def main() -> None:
     csv_file = None
     metrics = None
 
+    # 记录评估过程中的结果，打印并写入csv和tensorboard.
     def record_episode(episode: int, result: ValidationEpisode) -> None:
+        # episode：当前是第几局评估，例如第 1 局、第 2 局。
+        # 这一局的评估结果，包含得分、步数、最大蛇长、是否超时等信息。
+        
         scores.append(result.score)
         steps.append(result.steps)
         max_lengths.append(result.max_snake_length)

@@ -105,10 +105,9 @@ def resolve_max_steps_per_episode(args: argparse.Namespace) -> int | None:
         return None
     return TrainConfig.max_steps_per_episode
 
-
+# 校验训练参数、解析派生默认值，并构造最终配置。
 def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
-    """校验训练参数、解析派生默认值，并构造最终配置。"""
-
+    
     max_episodes = args.max_episodes
     if max_episodes < 1:
         raise ValueError("max episodes must be at least 1")
