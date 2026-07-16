@@ -131,9 +131,14 @@ class QNetwork(nn.Module):
                 nn.GroupNorm(branch_groups, cnn_output_channels),
                 nn.ReLU(),
             )
-            # 网格尺寸已经由 --width/--height 决定。恒等映射保留完整 HxW，
-            # 同时维持统一的分支调用方式，不再把不同棋盘强制缩放到固定尺寸。
-            self.global_pool = nn.Identity()
+
+            # 缓存 5x5 窗口在补零特征图中的25个相对位置。buffer 会随模型移动
+            # 到 CPU/CUDA，但 persistent=False 保证现有 checkpoint 的键完全不变。
+            radius = self.LOCAL_CROP_SIZE // 2
+            padded_width = width + 2 * radius
+            axis = torch.arange(self.LOCAL_CROP_SIZE)
+            local_offsets = axis[:, None] * padded_width + axis[None, :]
+            self.register_buffer("local_offsets", local_offsets.flatten(), persistent=False)
 
             # 全局维度随实际棋盘面积变化；局部分支始终为 8*5*5=200（默认通道数）。
             global_size = cnn_output_channels * height * width
@@ -180,20 +185,23 @@ class QNetwork(nn.Module):
         batch_size = head_mask.shape[0]
         # 展平后取 argmax，得到每个样本蛇头在 H*W 中的一维索引。
         flat_positions = head_mask.flatten(start_dim=1).argmax(dim=1)
+        head_y = flat_positions // head_mask.shape[2]
+        head_x = flat_positions % head_mask.shape[2]
 
         # 四周补两格后，即使蛇头位于角落，也能获得完整的 5x5 窗口。
         radius = self.LOCAL_CROP_SIZE // 2
         padded = F.pad(features, (radius, radius, radius, radius))
-        # unfold 为棋盘上的每个原始位置生成一个展平的 5x5 候选窗口：
-        # [B,C,H+4,W+4] -> [B,C*25,H*W]。
-        all_patches = F.unfold(padded, kernel_size=self.LOCAL_CROP_SIZE)
-        # 把蛇头索引扩展到所有 C*25 个特征，用一次 gather 在 GPU 上批量取出
-        # 每个样本对应的窗口，避免 Python 循环和逐样本 CPU/GPU 同步。
-        gather_index = flat_positions.view(batch_size, 1, 1).expand(
-            -1, all_patches.shape[1], -1
+        padded_flat = padded.flatten(2)
+
+        # padding 使窗口左上角恰好对应原始蛇头坐标；只收集目标25个位置，
+        # 避免 unfold 为棋盘所有 H*W 个位置生成候选窗口。
+        top_left = head_y * padded.shape[3] + head_x
+        gather_index = top_left[:, None] + self.local_offsets[None, :]
+        crops = padded_flat.gather(
+            2,
+            gather_index[:, None, :].expand(-1, features.shape[1], -1),
         )
-        crops = all_patches.gather(2, gather_index).squeeze(2)
-        # [B,C*25] 还原成 [B,C,5,5]，随后由调用方展平为200维。
+        # [B,C,25] 还原成 [B,C,5,5]，随后由调用方展平为200维。
         return crops.reshape(
             batch_size,
             features.shape[1],
@@ -208,7 +216,7 @@ class QNetwork(nn.Module):
         # 共享特征保持实际 HxW 分辨率，两个分支从同一语义特征图出发。
         shared = self.cnn(grid)
         # 全局分支：[B,32,H,W] -> [B,8,H,W] -> [B,8*H*W]。
-        global_features = self.global_pool(self.global_projection(shared)).flatten(1)
+        global_features = self.global_projection(shared).flatten(1)
         # 局部分支：[B,32,H,W] -> [B,8,H,W] -> 蛇头5x5 -> [B,200]。
         local_map = self.local_projection(shared)
         local_features = self._crop_around_head(local_map, grid).flatten(1)

@@ -113,7 +113,7 @@ def test_cnn_feature_size_follows_grid_dimensions(
     if state_mode == "hybrid":
         expected_features += 20
 
-    assert isinstance(network.global_pool, nn.Identity)
+    assert not hasattr(network, "global_pool")
     assert isinstance(network.feature[0], nn.Linear)
     assert network.feature[0].in_features == expected_features
     assert not any(isinstance(module, nn.AdaptiveAvgPool2d) for module in network.modules())
