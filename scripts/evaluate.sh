@@ -4,4 +4,4 @@
 set -euo pipefail
 
 # "$@"表示把你传给脚本的所有参数原样转发给训练程序。
-uv run python -m snake_ai.evaluate "$@"
+uv run --extra cpu python -m snake_ai.evaluate "$@"

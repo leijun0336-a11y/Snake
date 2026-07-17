@@ -1,3 +1,3 @@
 $ErrorActionPreference = "Stop"
 
-uv run python -m snake_ai.evaluate @args
+uv run --extra cpu python -m snake_ai.evaluate @args

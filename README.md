@@ -2,6 +2,16 @@
 
 基于 Double DQN 与 Dueling DQN 的贪吃蛇强化学习项目。代码包含可渲染的游戏环境、Vector/Grid/Hybrid 三种状态输入、动态棋盘 CNN、经验回放、阶段验证、checkpoint 选拔、独立评估和 TensorBoard 日志。
 
+## 🚀 快速启动游戏
+
+```bash
+uv run --extra cpu snake-play
+```
+
+> 这是游戏的唯一推荐启动命令。首次运行会自动安装项目依赖和 CPU 版 PyTorch，
+> 下载时间可能稍长；之后再次启动会直接复用已有环境。Windows 用户也可以双击
+> 根目录的 `start_game.bat`。
+
 ## 当前默认配置
 
 直接运行 `python -m snake_ai.train` 时使用以下主要默认值：
@@ -28,8 +38,8 @@
 默认值以 [config.py](src/snake_ai/config.py) 和命令行解析函数为准；可执行下面的命令查看完整参数：
 
 ```bash
-uv run python -m snake_ai.train --help
-uv run python -m snake_ai.evaluate --help
+uv run --extra cpu python -m snake_ai.train --help
+uv run --extra cpu python -m snake_ai.evaluate --help
 ```
 
 ## 项目结构
@@ -60,32 +70,64 @@ scripts/
 
 ## 安装与测试
 
-项目要求 Python 3.12+。`pyproject.toml` 没有固定 PyTorch 构建版本；AutoDL 脚本假设镜像已经提供适配 CUDA 的 PyTorch，本地环境也需要先确保 `torch` 可导入。
+项目要求 Python 3.12+。游戏环境与 GPU 训练环境使用互斥的 PyTorch 依赖，避免训练时误用 CPU 版。只运行游戏、加载 checkpoint 和进行 AI 推理时选择 `cpu`：
 
 ```bash
-uv sync
-uv run pytest
+uv sync --extra cpu
+uv run --extra cpu pytest
 ```
+
+> **PyTorch 版本说明：**只运行游戏时使用 `cpu` 即可；当前 AutoDL 训练使用 CUDA 12.4 对应的 `cu124`，两者不能同时选择。训练脚本会执行 CUDA 检查；检查失败时直接停止，不会退回 CPU 训练。
+
+```bash
+uv sync --extra cu124
+uv run --extra cu124 python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+## 游戏
+
+等价的模块启动方式：
+
+```bash
+uv run --extra cpu python -m snake_ai.game.game_app
+```
+
+首版固定使用 `6 × 6` 棋盘，提供三种模式：
+
+- `PLAY SOLO`：玩家单人游戏；
+- `WATCH AI`：观察当前内置 AI 自动游戏；
+- `HUMAN VS AI`：玩家和 AI 在双棋盘中进行公平竞速；
+- `RULES`：在游戏内查看完整规则与操作。
+
+玩家使用方向键或 `WASD` 转向，`P` 或 `Esc` 暂停。玩家模式开局前有 3 秒倒计时，倒计时期间也可以提前输入方向；直接反向的按键会按贪吃蛇规则忽略。规则页可以从主菜单或暂停菜单进入；设置页使用上下方向键或界面的 `+/-` 按钮，在 1～20 tick/s 间以 1 tick/s 为步长调整逻辑速度（默认 6 tick/s），也可以开关声音。渲染固定为 60 FPS，局内只显示 Score 和 Steps，所有可视化单局最多运行 400 step。
+
+本局结束后，棋盘会先停留并显示 `GAME OVER` 2 秒，再打开结算窗口。结算窗口显示胜者、双方分数与 step，并简要说明满分、碰撞、400 step 比分或平局等输赢原因。
+
+竞速模式使用相同初始状态和逻辑时钟。双方第 `n` 个食物由相同的比赛 seed 与进食序号生成同源候选排列，首个合法格作为各自食物；先达到棋盘满分者获胜。`6 × 6` 棋盘共 36 格、初始蛇长 3，因此满分为 33。碰撞者失败，400 step 后仍未满分则按分数和取得最终分数的先后顺序裁决。
+
+当前唯一 AI 固定加载 `checkpoints/dqn_20260715_091735/best.pt`。加载过程严格校验棋盘、状态模式、奖励配置、网络类型和 checkpoint 架构；文件缺失或配置不匹配时会明确报错，不会切换到其他权重。
+
+AI checkpoint 会在主菜单首帧显示后于后台预加载；首次点击 AI 模式时若尚未完成，会显示加载界面，避免阻塞主菜单响应。
 
 ## 训练
 
 直接训练当前默认 Hybrid 模型：
 
 ```bash
-uv run python -m snake_ai.train
+uv run --extra cu124 python -m snake_ai.train
 ```
 
 三种状态模式：
 
 ```bash
 # 20 维人工特征 MLP
-uv run python -m snake_ai.train --state-mode vector
+uv run --extra cu124 python -m snake_ai.train --state-mode vector
 
 # 纯 9 通道棋盘 CNN
-uv run python -m snake_ai.train --state-mode grid
+uv run --extra cu124 python -m snake_ai.train --state-mode grid
 
 # 9 通道棋盘 CNN + 20 维人工特征（默认）
-uv run python -m snake_ai.train --state-mode hybrid
+uv run --extra cu124 python -m snake_ai.train --state-mode hybrid
 ```
 
 Linux/AutoDL 与 PowerShell 包装脚本会把额外参数转发给训练入口：
@@ -285,17 +327,17 @@ hunger_reward = -0.02 × hunger_ratio²
 `RewardConfig` 中 `reference.potential_reward=False`，`experiment8.potential_reward=True`；但训练 CLI 当前默认显式开启势函数奖励，因此切换到 `reference` 后若要采用它原本的势函数开关，还需传入：
 
 ```bash
-uv run python -m snake_ai.train --reward-profile reference --no-potential-reward
+uv run --extra cu124 python -m snake_ai.train --reward-profile reference --no-potential-reward
 ```
 
 其他常用覆盖：
 
 ```bash
 # 关闭逐步成本和饥饿成本
-uv run python -m snake_ai.train --no-cost-rewards
+uv run --extra cu124 python -m snake_ai.train --no-cost-rewards
 
 # 显式限制每个训练 episode 的步数
-uv run python -m snake_ai.train --max-steps-per-episode 1000
+uv run --extra cu124 python -m snake_ai.train --max-steps-per-episode 1000
 ```
 
 未指定 `--max-steps-per-episode` 时，`experiment8` 不设置独立训练步数上限，`reference` 使用 `500`。这只是默认值，不是强制约束，命令行可以覆盖。
@@ -329,13 +371,13 @@ runs/<run_name>/events...train
 默认加载最新训练目录的 `latest.pt`，评估 1000 局、每局最多执行 1000 步，并打开 pygame：
 
 ```bash
-uv run python -m snake_ai.evaluate
+uv run --extra cpu python -m snake_ai.evaluate
 ```
 
 常用的无渲染评估：
 
 ```bash
-uv run python -m snake_ai.evaluate \
+uv run --extra cpu python -m snake_ai.evaluate \
   --checkpoint checkpoints/<run_name>/best.pt \
   --episodes 1000 \
   --max-steps 1000 \
@@ -347,7 +389,7 @@ uv run python -m snake_ai.evaluate \
 只有传入 `--tensorboard` 时，评估才会写入 `eval_metrics.csv` 和 `.eval` TensorBoard event；输出目录默认映射到 checkpoint 对应的 `runs/<run_name>`，也可用 `--eval-output-dir` 覆盖。
 
 ```bash
-uv run python -m snake_ai.evaluate --no-render --tensorboard
+uv run --extra cpu python -m snake_ai.evaluate --no-render --tensorboard
 ```
 
 评估会从 checkpoint 自动读取 `state_mode`，但棋盘 `--width/--height` 仍由命令行决定，必须与 checkpoint 的 `state_size` 一致。
@@ -355,7 +397,7 @@ uv run python -m snake_ai.evaluate --no-render --tensorboard
 architecture v2 的历史 Grid/Hybrid checkpoint 只有在旧池化尺寸与棋盘尺寸一致时才能由当前 `q_network` 直接加载。其他 v2 checkpoint 需要显式选择只读旧网络：
 
 ```bash
-uv run python -m snake_ai.evaluate \
+uv run --extra cpu python -m snake_ai.evaluate \
   --checkpoint checkpoints/dqn_20260712_130642/latest.pt \
   --network q_network_old \
   --width 6 --height 6 --no-render

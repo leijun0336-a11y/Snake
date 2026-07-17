@@ -9,12 +9,19 @@ dependencies = [
     "numpy>=2.0",
     "pygame>=2.6",
     "tensorboard>=2.17",
-    # torch 使用 AutoDL 自带的 (2.5.1+cu124)
 ]
+
+[project.optional-dependencies]
+# 只运行游戏和 AI 推理时选择 `--extra cpu`；CPU 版 PyTorch 已足够。
+cpu = ["torch>=2.5"]
+# 当前 AutoDL 训练环境选择 `--extra cu124`；训练必须使用 GPU 版 PyTorch，
+# 并确认 `torch.cuda.is_available()` 为 True，不能用 cpu extra 进行训练。
+cu124 = ["torch==2.5.1"]
 
 [project.scripts]
 snake-train = "snake_ai.train:main"
 snake-evaluate = "snake_ai.evaluate:main"
+snake-play = "snake_ai.game.game_app:main"
 
 [dependency-groups]
 dev = [
@@ -24,6 +31,28 @@ dev = [
 
 [tool.uv]
 package = true
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu124" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu124", extra = "cu124" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [tool.ruff]
 line-length = 100

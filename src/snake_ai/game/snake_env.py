@@ -9,6 +9,7 @@ from enum import Enum
 import numpy as np
 
 from snake_ai.config import get_reward_config
+from snake_ai.game.food_policy import FoodPolicy, RandomFoodPolicy
 
 
 GridState = np.ndarray
@@ -76,6 +77,8 @@ class SnakeEnv:
         step_penalty: float | None = None,
         # 饥饿成本系数，实际成本为 -scale * hunger_ratio**2；None 表示使用 profile 默认值。
         hunger_penalty_scale: float | None = None,
+        # 食物生成策略；None 保持原有的均匀随机行为。
+        food_policy: FoodPolicy[Point] | None = None,
     ) -> None:
         profile = get_reward_config(reward_profile)
         potential_reward = (
@@ -137,6 +140,7 @@ class SnakeEnv:
         self.step_penalty = step_penalty
         self.hunger_penalty_scale = hunger_penalty_scale
         self.random = random.Random(seed)
+        self.food_policy = RandomFoodPolicy() if food_policy is None else food_policy
         self.renderer = None
 
         # 如果开启渲染，导入渲染文件包
@@ -482,19 +486,24 @@ class SnakeEnv:
         return "collision_body"
 
     def _place_food(self) -> None:
-        available = [
+        all_cells = [
             Point(x, y)
             for x in range(self.width)
             for y in range(self.height)
-            if Point(x, y) not in self.snake
         ]
+        snake_cells = set(self.snake)
+        available = [point for point in all_cells if point not in snake_cells]
         # 极端情况: 如果整个地图都没有地方能放食物，则直接放在蛇头的位置
         if not available:
             self.food = self.snake[0]
             return
-        
-        # 随机化，得到食物的坐标
-        self.food = self.random.choice(available)
+
+        self.food = self.food_policy.choose(
+            all_cells,
+            available,
+            food_index=self.score,
+            rng=self.random,
+        )
 
     # 根据动作更新蛇的朝向，并计算蛇下一步要到达的新蛇头位置
     def _move(self, action: int) -> Point:
