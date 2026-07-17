@@ -14,14 +14,16 @@
 | 势函数进度奖励 | 开启，可用 `--no-potential-reward` 关闭 |
 | 步成本与饥饿成本 | 开启，可用 `--no-cost-rewards` 关闭 |
 | 最大训练局数 | `15000` |
+| 单局训练步数上限 | `experiment8` 不设独立上限；`reference` 默认 `500` |
 | Batch size | `128` |
 | Discount factor `gamma` | `0.99` |
 | Learning rate | `0.001` |
-| Epsilon | 从 `1.0` 线性降至 `0.01`，默认用总训练局数的一半 |
+| Epsilon | 从 `1.0` 线性降至 `0.01`，默认衰减 `7500` 局 |
 | 隐藏层宽度 | `256` |
 | CNN 主干/投影通道 | `32 / 8` |
 | 残差块 dilation | `1, 1, 2` |
 | Target network 同步间隔 | `1000` 次学习更新 |
+| 周期验证单局步数上限 | `1000` |
 
 默认值以 [config.py](src/snake_ai/config.py) 和命令行解析函数为准；可执行下面的命令查看完整参数：
 
@@ -50,6 +52,7 @@ src/snake_ai/
 └── utils.py               # 随机种子与统计工具
 
 scripts/
+├── benchmark_feature_crop.py
 ├── train_autodl.sh / .ps1
 ├── evaluate.sh / .ps1
 └── train_experiment8_autodl.sh
@@ -128,7 +131,7 @@ flowchart TB
 
         LP["局部 1×1 Conv 32→8<br/>GroupNorm + ReLU"]
         HEAD["由 Grid 通道 2:6 定位蛇头"]
-        CROP["Pad 2 + F.unfold + gather<br/>蛇头中心 5×5"]
+        CROP["Pad 2 + 展平 + 直接 gather 25 个位置<br/>蛇头中心 5×5"]
         LF["展平 [B,8×5×5] = [B,200]"]
         SF["空间特征拼接<br/>[B,8HW+200]"]
 
@@ -194,9 +197,27 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 | Grid | `8×20×20 + 200 = 3400` | `256` | `256→128→1/3` |
 | Hybrid | `3400 + 20 = 3420` | `256` | `256→128→1/3` |
 
-棋盘高宽直接来自 `--height` 和 `--width`，CNN 不做空间下采样或自适应池化。因此全局分支参数量随棋盘面积变化，checkpoint 评估时必须使用与训练一致的棋盘尺寸。局部分支始终截取蛇头周围 `5 × 5`；边缘位置先补零，因此输出尺寸固定且路径可反向传播。
+棋盘高宽直接来自 `--height` 和 `--width`，CNN 不做空间下采样或自适应池化。因此进入隐藏层的全局特征维度和融合全连接层参数量随棋盘面积变化，checkpoint 评估时必须使用与训练一致的棋盘尺寸。
+
+局部分支始终截取蛇头周围 `5 × 5`。它先从 Grid 的 `2:6` 方向通道定位蛇头，再给 `local_projection` 特征图四周补两格零，将其展平后直接 `gather` 目标窗口的 25 个位置。固定相对索引通过 `persistent=False` buffer 缓存，会随模型移动到 CPU/CUDA，但不写入 `state_dict`。该实现不再为全部 `H×W` 位置生成 `unfold` 候选窗口，输出和梯度与原实现严格等价，已有 architecture v3 checkpoint 可继续加载。
 
 当 `dueling=False` 时，不再使用 Value/Advantage 分支，而是通过单个 `Linear(256→3)` 直接输出动作 Q 值。当前训练入口默认启用 Dueling。
+
+### 特征裁剪性能基准
+
+CUDA 环境可运行同架构对照基准，比较修改前的 `unfold` 路径和当前直接索引路径：
+
+```bash
+uv run python scripts/benchmark_feature_crop.py
+```
+
+默认使用 `batch=128`，裁剪微基准使用 `8` 个特征通道，完整网络保持默认 `32/8` 主干/投影通道；分别在普通和确定性算法模式下测试 `6×6` 与 `20×20` 棋盘。每组预热 100 次，再运行 500 次并报告中位数。输出指标包括：
+
+- `crop_ms` / `crop_peak_MiB`：局部裁剪前向和反向延迟及预热后的额外峰值显存；
+- `network_ms` / `network_peak_MiB`：完整 Q 网络前向和反向延迟及额外峰值显存；
+- `dqn_steps_s`：包含 policy/target 推理、Huber loss、反向传播和 Adam 更新的核心 GPU DQN 更新吞吐。
+
+可用 `--batch-size`、`--channels`、`--sizes`、`--warmup` 和 `--iterations` 调整规模。该脚本要求 CUDA，没有 GPU 时会直接报错，不回退到 CPU。`dqn_steps_s` 不包含 ReplayBuffer 采样、NumPy 转换、CPU→GPU 传输、梯度裁剪和 target 定期同步，因此不能直接视为完整训练循环吞吐。
 
 ### 状态输入
 
@@ -252,6 +273,15 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 | 饿死时成本 | `replace` | `accumulate` |
 | 未进食上限 | 棋盘面积 + 蛇长，`>=` 触发 | 棋盘面积，`>` 触发 |
 
+`experiment8` 在合法且未吃到食物的移动后计算二次饥饿成本：
+
+```text
+hunger_ratio  = min(steps_since_food / starvation_limit, 1)
+hunger_reward = -0.02 × hunger_ratio²
+```
+
+例如 `6×6` 棋盘的 `starvation_limit=36`；连续第 36 步未进食时饥饿成本为 `-0.02`，第 37 步仍封顶为 `-0.02` 并触发饿死，再叠加步成本和 `-12` 饿死惩罚。吃到食物会把 `steps_since_food` 清零。
+
 `RewardConfig` 中 `reference.potential_reward=False`，`experiment8.potential_reward=True`；但训练 CLI 当前默认显式开启势函数奖励，因此切换到 `reference` 后若要采用它原本的势函数开关，还需传入：
 
 ```bash
@@ -289,13 +319,14 @@ runs/<run_name>/events...train
 - `latest.pt` 保存最近的训练状态。
 - Epsilon 首次到达下限时，运行 100 局 quick 与 500 局 confirmation 验证，并建立首个 best。
 - 之后默认每 500 个训练 episode 运行 quick；通过筛选后才进入 confirmation。
+- quick 和 confirmation 默认每局最多执行 `1000` 步，可用 `--validation-max-steps` 修改；提前碰撞、饿死或占满棋盘仍会立即结束。
 - 验证使用独立环境、固定且互不重叠的逐局种子，不写 replay buffer，也不改变训练网络状态。
 - 训练默认不开启早停。传入 `--early-stop` 后，达到 `--min-episodes` 才累计 patience；达到目标确认均分或连续多轮无确认提升时才停止。
 - `config.json` 和 checkpoint 的 `run_config` 保存环境、奖励、训练、网络和验证配置。
 
 ## 评估
 
-默认加载最新训练目录的 `latest.pt`，评估 1000 局并打开 pygame：
+默认加载最新训练目录的 `latest.pt`，评估 1000 局、每局最多执行 1000 步，并打开 pygame：
 
 ```bash
 uv run python -m snake_ai.evaluate
@@ -307,8 +338,11 @@ uv run python -m snake_ai.evaluate
 uv run python -m snake_ai.evaluate \
   --checkpoint checkpoints/<run_name>/best.pt \
   --episodes 1000 \
+  --max-steps 1000 \
   --no-render
 ```
+
+达到 `--max-steps` 但环境尚未终止的局会记录为 `timed_out=True`。该上限只限制评估，不改变训练 episode 的步数规则。
 
 只有传入 `--tensorboard` 时，评估才会写入 `eval_metrics.csv` 和 `.eval` TensorBoard event；输出目录默认映射到 checkpoint 对应的 `runs/<run_name>`，也可用 `--eval-output-dir` 覆盖。
 
@@ -362,7 +396,17 @@ observation, reward, done, info
 
 ## 可复现性
 
-训练与评估都会设置 Python、NumPy、PyTorch 和 CUDA 随机种子。训练默认优先速度；传入 `--deterministic` 后才启用 PyTorch/cuDNN 确定性设置。阶段验证和独立评估为每个 episode 使用固定且独立的种子，因此同一模型可以在相同局面集合上公平比较。
+训练与评估都会设置 Python、NumPy、PyTorch 和 CUDA 随机种子。训练默认优先速度；`--deterministic` 会同时设置：
+
+| 配置 | 默认 | `--deterministic` |
+|---|---:|---:|
+| `torch.use_deterministic_algorithms` | `False` | `True` |
+| `torch.backends.cudnn.deterministic` | `False` | `True` |
+| `torch.backends.cudnn.benchmark` | `True` | `False` |
+
+`train_experiment8_autodl.sh` 还会设置 `CUBLAS_WORKSPACE_CONFIG=:4096:8`。阶段验证和独立评估为每个 episode 使用固定且独立的种子，因此同一模型可以在相同局面集合上公平比较。
+
+特征裁剪基准中的 `default/deterministic` 当前只切换 `torch.use_deterministic_algorithms`，用于隔离算子确定性开销，不等同于训练入口的完整 `--deterministic` 设置。
 
 不同 GPU、CUDA、驱动或 PyTorch 版本之间仍可能存在细微差异。
 

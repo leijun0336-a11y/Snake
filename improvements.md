@@ -577,5 +577,6 @@ Checkpoint：`checkpoints/dqn_20260715_091735/best.pt`（最终测试集 2000 �
 >>   --height 6 `
 >>   --checkpoint .\checkpoints\dqn_20260715_091735\best.pt `
 >>   --episodes 100 `
+>>   --max-steps 300
 
 这是表演模式。
