@@ -14,6 +14,10 @@ SeedSetName = Literal["quick", "confirmation", "final"]
 
 SEED_SET_STRIDE = 1_000_000
 COMPARISON_EPSILON = 1e-12
+# 现有选拔阈值最初按 6x6 棋盘制定；初始蛇长为 3，因此满分为 33。
+# 其他棋盘先按“平均分 / 满分”计算完成比例，再换算到这个基准分数尺度。
+# 这样阈值仍可保持原值，同时 full_score=33 时能够走原始计算路径。
+SELECTION_REFERENCE_FULL_SCORE = 33
 SEED_SET_INDEX: dict[SeedSetName, int] = {
     "quick": 1,
     "confirmation": 2,
@@ -63,7 +67,8 @@ class ValidationResult:
         return asdict(self)
 
 
-# 验证选拔标准的配置
+# 验证选拔标准的配置。均分相关阈值使用 6x6 满分 33 的等价分数尺度；
+# 满分率相关阈值本身已经是比例，不需要随棋盘尺寸换算。
 @dataclass(frozen=True)
 class SelectionThresholds:
     quick_mean_delta: float = 0.25
@@ -322,7 +327,7 @@ def passes_quick_screen(
     thresholds: SelectionThresholds = DEFAULT_SELECTION_THRESHOLDS,
 ) -> bool:
     _require_comparable(candidate, incumbent, "quick")
-    mean_delta = candidate.mean_score - incumbent.mean_score
+    mean_delta = _selection_mean_delta(candidate, incumbent)
     full_rate_delta = candidate.full_rate - incumbent.full_rate
     return _gte(mean_delta, thresholds.quick_mean_delta) or (
         _gte(mean_delta, -thresholds.quick_mean_tolerance)
@@ -338,7 +343,7 @@ def passes_confirmation(
     thresholds: SelectionThresholds = DEFAULT_SELECTION_THRESHOLDS,
 ) -> bool:
     _require_comparable(candidate, incumbent, "confirmation")
-    mean_delta = candidate.mean_score - incumbent.mean_score
+    mean_delta = _selection_mean_delta(candidate, incumbent)
     full_rate_delta = candidate.full_rate - incumbent.full_rate
     return _gte(mean_delta, thresholds.confirmation_mean_delta) or (
         abs(mean_delta) <= thresholds.confirmation_mean_tolerance + COMPARISON_EPSILON
@@ -459,6 +464,24 @@ def _require_comparable(
         raise ValueError(
             "validation results must use the same episode count, max_steps, and full_score"
         )
+
+
+def _selection_mean_delta(
+    candidate: ValidationResult,
+    incumbent: ValidationResult,
+) -> float:
+    """返回按棋盘满分归一化后的 6x6 等价均分差。"""
+    full_score = candidate.full_score
+    if full_score <= 0:
+        raise ValueError("validation full_score must be positive")
+    if full_score == SELECTION_REFERENCE_FULL_SCORE:
+        # 保留历史 6x6 的原始减法路径，避免额外除法和乘法引入任何浮点差异。
+        return candidate.mean_score - incumbent.mean_score
+    completion_delta = (
+        candidate.mean_score / full_score
+        - incumbent.mean_score / full_score
+    )
+    return completion_delta * SELECTION_REFERENCE_FULL_SCORE
 
 
 def _gte(left: float, right: float) -> bool:

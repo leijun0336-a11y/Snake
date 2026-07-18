@@ -362,6 +362,8 @@ runs/<run_name>/events...train
 - Epsilon 首次到达下限时，运行 100 局 quick 与 500 局 confirmation 验证，并建立首个 best。
 - 之后默认每 500 个训练 episode 运行 quick；通过筛选后才进入 confirmation。
 - quick 和 confirmation 默认每局最多执行 `1000` 步，可用 `--validation-max-steps` 修改；提前碰撞、饿死或占满棋盘仍会立即结束。
+- quick/confirmation 的均分差先除以各自棋盘满分，再换算为6×6满分33的等价分差；
+  因此同一套选拔阈值可以用于不同网格。6×6直接使用原始均分差，行为与历史实现一致。
 - 验证使用独立环境、固定且互不重叠的逐局种子，不写 replay buffer，也不改变训练网络状态。
 - 训练默认不开启早停。传入 `--early-stop` 后，达到 `--min-episodes` 才累计 patience；达到目标确认均分或连续多轮无确认提升时才停止。
 - `config.json` 和 checkpoint 的 `run_config` 保存环境、奖励、训练、网络和验证配置。
