@@ -29,6 +29,7 @@ from snake_ai.validation import (
     make_episode_seeds,
     run_staged_validation,
 )
+from snake_ai.wandb_logging import WandbRun, start_wandb, training_metrics
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -45,6 +46,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps-per-episode", type=int, default=None)
     # 是否带渲染训练, action="store_true"表示：启动脚本时写上--render则为True，不写默认为False
     parser.add_argument("--render", action="store_true")
+    parser.add_argument(
+        "--wandb",
+        action="store_true",
+        help="log the reference training curves live to the Snake W&B project",
+    )
     parser.add_argument("--width", type=int, default=EnvConfig.width)
     parser.add_argument("--height", type=int, default=EnvConfig.height)
     # 渲染游戏时每个格子的像素尺寸
@@ -608,7 +614,16 @@ def main() -> None:
             }
             agent.save(checkpoint_dir / "best.pt", metadata=metadata)
 
+        wandb_run: WandbRun | None = None
+        training_succeeded = False
         try:
+            if args.wandb:
+                wandb_run = start_wandb(
+                    run_name=run_name,
+                    run_dir=run_dir,
+                    config=run_config,
+                )
+
             for episode in range(1, train_config.episodes + 1):
                 state = env.reset()
                 done = False
@@ -715,6 +730,22 @@ def main() -> None:
                     # 经验回放池当前容量
                     writer.add_scalar("train/replay_buffer_size", len(agent.replay_buffer), episode)
 
+                if wandb_run is not None:
+                    wandb_run.log(
+                        training_metrics(
+                            episode=episode,
+                            scores=scores,
+                            mean_score_100=mean_score,
+                            episode_reward=episode_reward,
+                            mean_reward_100=mean_reward,
+                            episode_steps=episode_steps_history,
+                            loss=mean_loss,
+                            mean_loss_100=mean_loss_100,
+                            epsilon=agent.epsilon,
+                            replay_buffer_size=len(agent.replay_buffer),
+                        )
+                    )
+
                 metrics.writerow(
                     [
                         episode,
@@ -801,33 +832,49 @@ def main() -> None:
 
                 if decision.stop_reason is not None:
                     break
+            training_succeeded = True
         finally:  # 无论上面是否跑完，这段代码都必须执行。
             env.close()
             validation_env.close()
-            if writer is not None:
-                if scores:
-                    writer.add_text(
-                        "train/report",
-                        format_train_report(
-                            run_name=run_name,
-                            episodes=len(scores),
-                            total_time_sec=time.perf_counter() - train_start_time,
-                            best_score=best_score,
-                            best_mean_score=best_mean_score,
-                            scores=scores,
-                            episode_steps=episode_steps_history,
-                            score_per_steps=score_per_steps,
-                            mean_scores=mean_scores,
-                            episode_rewards=episode_rewards,
-                            mean_rewards=mean_rewards,
-                            losses=losses_history,
-                            mean_loss_100s=mean_loss_100s,
-                            epsilons=epsilons,
-                            replay_buffer_sizes=replay_buffer_sizes,
-                        ),
-                        global_step=len(scores),
-                    )
-                writer.close()
+            try:
+                if writer is not None:
+                    if scores:
+                        writer.add_text(
+                            "train/report",
+                            format_train_report(
+                                run_name=run_name,
+                                episodes=len(scores),
+                                total_time_sec=time.perf_counter() - train_start_time,
+                                best_score=best_score,
+                                best_mean_score=best_mean_score,
+                                scores=scores,
+                                episode_steps=episode_steps_history,
+                                score_per_steps=score_per_steps,
+                                mean_scores=mean_scores,
+                                episode_rewards=episode_rewards,
+                                mean_rewards=mean_rewards,
+                                losses=losses_history,
+                                mean_loss_100s=mean_loss_100s,
+                                epsilons=epsilons,
+                                replay_buffer_sizes=replay_buffer_sizes,
+                            ),
+                            global_step=len(scores),
+                        )
+                    writer.close()
+            finally:
+                if wandb_run is not None:
+                    try:
+                        if scores:
+                            wandb_run.summary.update(
+                                {
+                                    "episodes": len(scores),
+                                    "best_score": best_score,
+                                    "best_mean_score_100": best_mean_score,
+                                    "total_time_sec": time.perf_counter() - train_start_time,
+                                }
+                            )
+                    finally:
+                        wandb_run.finish(exit_code=0 if training_succeeded else 1)
 
     if validation_state.best_training_episode is None:
         print(

@@ -1,6 +1,6 @@
 # Snake AI
 
-基于 Double DQN 与 Dueling DQN 的贪吃蛇强化学习项目。代码包含可渲染的游戏环境、Vector/Grid/Hybrid 三种状态输入、动态棋盘 CNN、经验回放、阶段验证、checkpoint 选拔、独立评估和 TensorBoard 日志。
+基于 Double DQN 与 Dueling DQN 的贪吃蛇强化学习项目。代码包含可渲染的游戏环境、Vector/Grid/Hybrid 三种状态输入、动态棋盘 CNN、经验回放、阶段验证、checkpoint 选拔、独立评估，以及 TensorBoard/W&B 日志。
 
 ## 🚀 快速启动游戏
 
@@ -116,6 +116,14 @@ AI checkpoint 会在主菜单首帧显示后于后台预加载；首次点击 AI
 ```bash
 uv run --extra cu124 python -m snake_ai.train
 ```
+
+训练默认不连接 W&B。首次使用先执行 `uv run wandb login`，再显式加入 `--wandb`：
+
+```bash
+uv run --extra cu124 python -m snake_ai.train --wandb
+```
+
+启用后，run 会实时写入项目 `Snake`，并为该 run 创建一个固定的 `2 列 × 3 行` saved view。若 W&B 登录、网络或工作区布局配置失败，训练会明确报错并停止，不会退回自动生成的散乱面板。
 
 三种状态模式：
 
@@ -407,7 +415,7 @@ uv run --extra cpu python -m snake_ai.evaluate \
 
 `q_network_old` 只允许评估，不能训练或保存新 checkpoint。
 
-## 日志与 TensorBoard
+## 日志、TensorBoard 与 W&B
 
 训练 CSV/TensorBoard 主要记录：
 
@@ -423,6 +431,16 @@ uv run tensorboard --logdir runs
 ```
 
 浏览器打开 `http://localhost:6006`。同一 run 中 `.train` 和 `.eval` event 可以同时存在，分别使用 `train/*`、`validation/*` 与 `eval/*` tag。
+
+`--wandb` 的六个面板按参考图固定为：
+
+| 行 | 左 | 右 |
+|---|---|---|
+| 1 | Score：`score`、`score_rolling50`、`mean_score_100` | Reward：`episode_reward`、`mean_reward_100` |
+| 2 | Episode Steps：`steps`、`steps_rolling50` | Loss：`loss`、`mean_loss_100` |
+| 3 | Epsilon：`epsilon` | Replay Buffer Size：`replay_buffer_size` |
+
+横轴统一为 `episode`，每个 episode 只调用一次 W&B 日志写入，避免 W&B 内部 step 与训练局数错位。W&B 原生 Line Plot 不支持 Matplotlib 中原始曲线的半透明度，也不能分别指定参考图所用的左上/右上图例角落；W&B 工作区也没有随 episode 动态更新的整图标题和底部注释。代码已固定面板布局、顺序、标题、坐标轴、曲线集合、颜色和线宽，saved view 名称包含 run name，最新值进入 run summary，但上述三处视觉细节无法完全一致。
 
 ## 环境返回值
 

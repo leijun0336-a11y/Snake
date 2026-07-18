@@ -20,6 +20,15 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.confirmation_episodes == 500
     assert args.validation_patience == 8
     assert args.validation_max_steps == 1000
+    assert args.wandb is False
+
+
+def test_parse_args_enables_wandb_only_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--wandb"])
+
+    assert parse_args().wandb is True
 
 
 def test_build_configs_matches_environment_minimum_size(
