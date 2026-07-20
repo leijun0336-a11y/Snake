@@ -48,44 +48,28 @@ class StrictSafePlanner10x10:
             if not self._path_is_strictly_safe(state, committed_path):
                 raise PlanCommitmentError("committed food path no longer matches the live state")
 
+        # 阶段二不再只寻找一条全局最短路线。对每个 Hamiltonian 安全首动作都
+        # 独立搜索并验证一条“能及时吃到食物，吃完仍可到达尾巴”的完整见证路径。
+        # 静态 A* 的候选若验证失败，会立刻以完整蛇身状态重试，避免漏掉可行首动作。
+        committed_action = committed_path[0] if committed_path is not None else None
+        actions_to_assess = tuple(action for action in cycle_safe if action != committed_action)
         assessments = assess_food_actions(
             state,
-            cycle_safe,
+            actions_to_assess,
             max_expansions=self.config.max_astar_expansions,
             max_actions_to_food=max_actions_to_food,
             state_validator=self.cycle.is_state_compatible,
-            allow_dynamic_retry=False,
+            allow_dynamic_retry=True,
         )
         path_by_action = self._safe_paths(assessments)
         if committed_path is not None:
-            action = committed_path[0]
-            existing = path_by_action.get(action)
-            if existing is None or len(committed_path) < len(existing):
-                path_by_action[action] = committed_path
-
-        if not path_by_action:
-            # 只有快速静态候选和已认证后缀都无解时，才支付完整状态搜索成本。
-            # 这保留严格性，同时避免在每个普通帧为所有被拒动作做昂贵搜索。
-            assessments = assess_food_actions(
-                state,
-                cycle_safe,
-                max_expansions=self.config.max_astar_expansions,
-                max_actions_to_food=max_actions_to_food,
-                state_validator=self.cycle.is_state_compatible,
-                allow_dynamic_retry=True,
-            )
-            path_by_action = self._safe_paths(assessments)
+            # 上方已经用完整动态模拟重新验证过该后缀，无需再次为同一首动作运行 A*。
+            path_by_action[committed_path[0]] = committed_path
 
         if path_by_action:
-            # 只暴露最短安全食物路径的首动作，防止逐帧重新规划时反复绕开食物。
-            shortest = min(len(path) for path in path_by_action.values())
-            selected = tuple(
-                sorted(
-                    (action, path)
-                    for action, path in path_by_action.items()
-                    if len(path) == shortest
-                )
-            )
+            # 所有动作都有各自的完整安全见证路径，因此都可交给 DQN 比较 Q 值。
+            # 已提交路径只作为下一帧至少仍有一条可行路线的证明，不强迫继续执行。
+            selected = tuple(sorted(path_by_action.items()))
             return PlannerDecision(
                 admissible_actions=tuple(action for action, _ in selected),
                 certified_paths=tuple(path for _, path in selected),

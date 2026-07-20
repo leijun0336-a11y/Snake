@@ -36,11 +36,19 @@ class PlannedEvaluationSummary:
     max_steps: int
     mean_score: float
     score_std: float
+    mean_steps: float
+    step_std: float
     max_score: int
     completion_rate: float
     timeout_rate: float
     override_rate: float
     hamiltonian_cycle_rate: float
+    single_safe_action_rate: float
+    multi_safe_action_rate: float
+    three_safe_action_rate: float
+    mean_admissible_action_count: float
+    raw_dqn_safe_rate: float
+    dqn_non_default_choice_rate: float
     planner_mean_ms: float
     planner_max_ms: float
     total_time_sec: float
@@ -172,6 +180,12 @@ def evaluate(
     total_decisions = 0
     total_overrides = 0
     total_hamiltonian_decisions = 0
+    total_single_safe_decisions = 0
+    total_multi_safe_decisions = 0
+    total_three_safe_decisions = 0
+    total_admissible_actions = 0
+    total_raw_dqn_safe_decisions = 0
+    total_dqn_non_default_choices = 0
     started = time.perf_counter()
 
     try:
@@ -211,6 +225,12 @@ def evaluate(
                 planner_overrides=metrics.overrides,
                 safe_food_decisions=metrics.tiers[DecisionTier.SAFE_FOOD.value],
                 hamiltonian_cycle_decisions=metrics.tiers[DecisionTier.HAMILTONIAN_CYCLE.value],
+                single_safe_action_decisions=metrics.single_safe_action_decisions,
+                multi_safe_action_decisions=metrics.multi_safe_action_decisions,
+                three_safe_action_decisions=metrics.three_safe_action_decisions,
+                admissible_action_total=metrics.admissible_action_total,
+                raw_dqn_safe_decisions=metrics.raw_dqn_safe_decisions,
+                dqn_non_default_choices=metrics.dqn_non_default_choices,
                 planner_total_ms=metrics.total_ms,
                 planner_max_ms=metrics.max_ms,
             )
@@ -218,6 +238,12 @@ def evaluate(
             total_decisions += metrics.decisions
             total_overrides += metrics.overrides
             total_hamiltonian_decisions += result.hamiltonian_cycle_decisions
+            total_single_safe_decisions += result.single_safe_action_decisions
+            total_multi_safe_decisions += result.multi_safe_action_decisions
+            total_three_safe_decisions += result.three_safe_action_decisions
+            total_admissible_actions += result.admissible_action_total
+            total_raw_dqn_safe_decisions += result.raw_dqn_safe_decisions
+            total_dqn_non_default_choices += result.dqn_non_default_choices
             print(
                 f"episode={episode:4d} score={result.score:3d} steps={result.steps:4d} "
                 f"reason={result.termination_reason} overrides={result.planner_overrides}"
@@ -227,6 +253,7 @@ def evaluate(
 
     elapsed = time.perf_counter() - started
     scores = [result.score for result in results]
+    steps = [result.steps for result in results]
     summary = PlannedEvaluationSummary(
         checkpoint=str(checkpoint_path),
         protocol=protocol,
@@ -234,12 +261,34 @@ def evaluate(
         max_steps=max_steps,
         mean_score=statistics.fmean(scores),
         score_std=statistics.pstdev(scores) if episodes > 1 else 0.0,
+        mean_steps=statistics.fmean(steps),
+        step_std=statistics.pstdev(steps) if episodes > 1 else 0.0,
         max_score=max(scores),
         completion_rate=sum(result.completed for result in results) / episodes,
         timeout_rate=sum(result.timed_out for result in results) / episodes,
         override_rate=total_overrides / total_decisions if total_decisions else 0.0,
         hamiltonian_cycle_rate=(
             total_hamiltonian_decisions / total_decisions if total_decisions else 0.0
+        ),
+        single_safe_action_rate=(
+            total_single_safe_decisions / total_decisions if total_decisions else 0.0
+        ),
+        multi_safe_action_rate=(
+            total_multi_safe_decisions / total_decisions if total_decisions else 0.0
+        ),
+        three_safe_action_rate=(
+            total_three_safe_decisions / total_decisions if total_decisions else 0.0
+        ),
+        mean_admissible_action_count=(
+            total_admissible_actions / total_decisions if total_decisions else 0.0
+        ),
+        raw_dqn_safe_rate=(
+            total_raw_dqn_safe_decisions / total_decisions if total_decisions else 0.0
+        ),
+        dqn_non_default_choice_rate=(
+            total_dqn_non_default_choices / total_multi_safe_decisions
+            if total_multi_safe_decisions
+            else 0.0
         ),
         planner_mean_ms=(statistics.fmean(all_planner_ns) / 1_000_000 if all_planner_ns else 0.0),
         planner_max_ms=(max(all_planner_ns) / 1_000_000 if all_planner_ns else 0.0),

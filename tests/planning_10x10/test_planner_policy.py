@@ -140,6 +140,21 @@ def test_real_planner_only_returns_actions_preserving_cycle_order() -> None:
         assert planner.cycle.is_state_compatible(transition.next_state)
 
 
+def test_viability_planner_exposes_all_certified_actions_not_only_shortest() -> None:
+    state = PlanningState(
+        width=10,
+        height=10,
+        snake=(Point(5, 5), Point(4, 5), Point(3, 5)),
+        direction=Direction.RIGHT,
+        food=Point(0, 6),
+    )
+
+    decision = StrictSafePlanner10x10().certify(state)
+
+    assert decision.admissible_actions == (0, 1, 2)
+    assert tuple(len(path) for path in decision.certified_paths) == (8, 6, 8)
+
+
 def test_planner_uses_certified_hamiltonian_path_when_astar_budget_is_exhausted() -> None:
     env = SnakeEnv(width=10, height=10, seed=3, state_mode="hybrid")
     planner = StrictSafePlanner10x10(Planner10x10Config(max_astar_expansions=1))
@@ -193,9 +208,10 @@ def test_committed_safe_path_survives_next_frame_static_astar_false_negative() -
 
     assert selected_path == (2, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0)
     assert transition.next_state is not None
-    # 完整状态 A* 能找到静态 A* 漏掉的安全等长路径。
+    # 完整状态 A* 能找到静态 A* 漏掉的安全路径；阶段二还会同时暴露
+    # 其他通过生存性认证的动作，但已认证后缀的首动作不能丢失。
     dynamic_decision = planner.certify(transition.next_state)
-    assert dynamic_decision.admissible_actions == (selected_path[1],)
+    assert selected_path[1] in dynamic_decision.admissible_actions
 
     # 即使把后续搜索预算压到 1，已认证后缀仍可独立维持递归可行性。
     limited_planner = StrictSafePlanner10x10(Planner10x10Config(max_astar_expansions=1))
@@ -224,13 +240,41 @@ def test_policy_tracks_selected_certified_path_and_rejects_state_divergence() ->
     assert first.action == 2
     assert transition.next_state is not None
     second = policy.choose_action(make_observation(), transition.next_state)
-    assert second.action == 0
+    assert second.action == 2
+    committed_next_action = first.planner_decision.path_for_action(first.action)[1]
+    assert committed_next_action in second.planner_decision.admissible_actions
 
     with pytest.raises(PlanCommitmentError, match="live state differs"):
         policy.choose_action(make_observation(), state)
 
     policy.reset()
     assert policy.choose_action(make_observation(), state).action == 2
+
+
+def test_policy_can_replace_committed_path_with_another_certified_action() -> None:
+    state = PlanningState(
+        width=10,
+        height=10,
+        snake=(Point(5, 5), Point(4, 5), Point(3, 5)),
+        direction=Direction.RIGHT,
+        food=Point(5, 7),
+    )
+    policy = PlannedDQNPolicy10x10(
+        make_fake_agent((9.0, 1.0, 0.0)),
+        StrictSafePlanner10x10(),
+    )
+
+    first = policy.choose_action(make_observation(), state)
+    first_transition = simulate_action(state, first.action)
+    assert first.action == 0
+    assert first_transition.next_state is not None
+
+    # 第一帧提交路径的下一步是左转；第二帧仍会重新认证其他动作，
+    # 因而 DQN 可以选择更高 Q 的直行并替换旧的安全见证。
+    second = policy.choose_action(make_observation(), first_transition.next_state)
+    assert first.planner_decision.path_for_action(first.action)[1] == 1
+    assert len(second.planner_decision.admissible_actions) >= 2
+    assert second.action == 0
 
 
 def _commitment_regression_state() -> PlanningState:

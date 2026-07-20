@@ -144,6 +144,10 @@ def test_random_dqn_and_strict_planner_complete_a_short_smoke_without_collision(
         for result in results
     )
     assert 0.0 <= summary.hamiltonian_cycle_rate <= 1.0
+    assert summary.single_safe_action_rate + summary.multi_safe_action_rate == pytest.approx(1.0)
+    assert 1.0 <= summary.mean_admissible_action_count <= 3.0
+    assert 0.0 <= summary.raw_dqn_safe_rate <= 1.0
+    assert 0.0 <= summary.dqn_non_default_choice_rate <= 1.0
 
 
 def test_result_writer_uses_new_directory_and_refuses_overwrite(tmp_path: Path) -> None:
@@ -161,6 +165,12 @@ def test_result_writer_uses_new_directory_and_refuses_overwrite(tmp_path: Path) 
         planner_overrides=2,
         safe_food_decisions=8,
         hamiltonian_cycle_decisions=2,
+        single_safe_action_decisions=6,
+        multi_safe_action_decisions=4,
+        three_safe_action_decisions=1,
+        admissible_action_total=15,
+        raw_dqn_safe_decisions=8,
+        dqn_non_default_choices=2,
         planner_total_ms=3.0,
         planner_max_ms=0.5,
     )
@@ -171,11 +181,19 @@ def test_result_writer_uses_new_directory_and_refuses_overwrite(tmp_path: Path) 
         max_steps=10,
         mean_score=1.0,
         score_std=0.0,
+        mean_steps=10.0,
+        step_std=0.0,
         max_score=1,
         completion_rate=0.0,
         timeout_rate=1.0,
         override_rate=0.2,
         hamiltonian_cycle_rate=0.2,
+        single_safe_action_rate=0.6,
+        multi_safe_action_rate=0.4,
+        three_safe_action_rate=0.1,
+        mean_admissible_action_count=1.5,
+        raw_dqn_safe_rate=0.8,
+        dqn_non_default_choice_rate=0.5,
         planner_mean_ms=0.3,
         planner_max_ms=0.5,
         total_time_sec=1.0,
