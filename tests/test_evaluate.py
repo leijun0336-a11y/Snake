@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from snake_ai.evaluate import build_configs, find_latest_checkpoint, parse_args
+from snake_ai.evaluate import (
+    build_configs,
+    find_latest_checkpoint,
+    open_eval_metrics_csv,
+    parse_args,
+)
 
 
 def test_build_configs_resolves_evaluation_defaults(
@@ -59,3 +64,38 @@ def test_find_latest_checkpoint_does_not_fallback_to_best_pt(tmp_path: Path) -> 
 
     with pytest.raises(FileNotFoundError, match=r"No latest\.pt found"):
         find_latest_checkpoint(tmp_path)
+
+
+def test_open_eval_metrics_csv_overwrites_previous_evaluation(tmp_path: Path) -> None:
+    csv_path = tmp_path / "eval_metrics.csv"
+    csv_path.write_text(
+        "episode,score,steps,score_per_step,max_snake_length\n"
+        "1,99,999,0.099099,102\n",
+        encoding="utf-8",
+    )
+
+    csv_file, metrics = open_eval_metrics_csv(csv_path)
+    try:
+        metrics.writerow([1, 7, 42, "0.166667", 10])
+    finally:
+        csv_file.close()
+
+    assert csv_path.read_text(encoding="utf-8").splitlines() == [
+        "episode,score,steps,score_per_step,max_snake_length",
+        "1,7,42,0.166667,10",
+    ]
+
+
+def test_open_eval_metrics_csv_truncates_interrupted_run_immediately(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "eval_metrics.csv"
+    csv_path.write_text("old interrupted evaluation\n", encoding="utf-8")
+
+    csv_file, _ = open_eval_metrics_csv(csv_path)
+    try:
+        assert csv_path.read_text(encoding="utf-8").splitlines() == [
+            "episode,score,steps,score_per_step,max_snake_length"
+        ]
+    finally:
+        csv_file.close()

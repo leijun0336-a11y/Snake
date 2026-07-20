@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
+from typing import Any, TextIO
 
 import torch
 
@@ -16,6 +17,15 @@ from snake_ai.config import CHECKPOINT_DIR, RUNS_DIR, EnvConfig, TrainConfig
 from snake_ai.game import SnakeEnv
 from snake_ai.utils import set_seed, summarize_values
 from snake_ai.validation import ValidationEpisode, evaluate_policy, make_episode_seeds
+
+
+EVAL_METRICS_HEADER = (
+    "episode",
+    "score",
+    "steps",
+    "score_per_step",
+    "max_snake_length",
+)
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -87,6 +97,15 @@ def find_run_dir_for_checkpoint(checkpoint_path: Path, runs_dir: Path = RUNS_DIR
     if run_name.startswith("dqn_"):
         return runs_dir / run_name
     return find_latest_run_dir(runs_dir)
+
+
+# 每次评估都创建一份全新的 CSV，避免中断重跑或切换 checkpoint 后混入旧数据。
+def open_eval_metrics_csv(csv_path: Path) -> tuple[TextIO, Any]:
+    csv_file = csv_path.open("w", newline="", encoding="utf-8")
+    metrics = csv.writer(csv_file)
+    metrics.writerow(EVAL_METRICS_HEADER)
+    csv_file.flush()
+    return csv_file, metrics
 
 
 # 把一次评估的统计结果整理成 Markdown 格式的文本报告，放入tensorboard的 text 标签页中。
@@ -299,19 +318,7 @@ def main() -> None:
 
     try:
         if csv_path is not None:
-            csv_file = csv_path.open("a", newline="", encoding="utf-8")
-            metrics = csv.writer(csv_file)
-            # 首次创建 CSV 时写入表头
-            if csv_path.stat().st_size == 0:
-                metrics.writerow(
-                    [
-                        "episode",
-                        "score",
-                        "steps",
-                        "score_per_step",
-                        "max_snake_length",
-                    ]
-                )
+            csv_file, metrics = open_eval_metrics_csv(csv_path)
 
         seeds = make_episode_seeds(train_config.seed, "final", args.episodes)
         result = evaluate_policy(
