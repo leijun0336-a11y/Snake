@@ -9,7 +9,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from snake_ai.agents import DQNAgent
 from snake_ai.config import (
@@ -31,6 +31,9 @@ from snake_ai.validation import (
     run_staged_validation,
 )
 from snake_ai.wandb_logging import WandbRun, start_wandb, training_metrics
+
+if TYPE_CHECKING:
+    from snake_ai.planning_10x10.hamiltonian import HamiltonianCycle10x10
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -65,9 +68,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mask",
         action="store_true",
-        help="enable strict 10x10 Hamiltonian + tail-safe A* action masking",
+        help="enable lightweight 10x10 Hamiltonian viability action masking",
     )
-    parser.add_argument("--mask-max-astar-expansions", type=int, default=500)
     # 选奖励配置
     parser.add_argument("--reward-profile", choices=REWARD_PROFILE_NAMES, default="experiment8")
     # 是否使用势函数进度奖励，默认启用；可通过 --no-potential-reward 关闭(argparse内置方法)。
@@ -187,8 +189,6 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
             raise ValueError("--mask requires state_mode=hybrid")
         if args.reward_profile != "experiment8":
             raise ValueError("--mask requires reward_profile=experiment8")
-        if args.mask_max_astar_expansions < 1:
-            raise ValueError("mask_max_astar_expansions must be positive")
 
     train_config = TrainConfig(
         episodes=max_episodes,
@@ -218,28 +218,33 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
     return train_config, env_config
 
 
-def build_mask_planner(args: argparse.Namespace) -> Any | None:
-    """仅在显式 --mask 时延迟导入并创建 10×10 规划器。"""
+def build_mask_certifier(args: argparse.Namespace) -> HamiltonianCycle10x10 | None:
+    """仅在显式 --mask 时延迟创建轻量 Hamiltonian 认证器。"""
 
     if not args.mask:
         return None
-    from snake_ai.planning_10x10 import Planner10x10Config, StrictSafePlanner10x10
+    from snake_ai.planning_10x10.hamiltonian import HamiltonianCycle10x10
 
-    return StrictSafePlanner10x10(
-        Planner10x10Config(max_astar_expansions=args.mask_max_astar_expansions)
-    )
+    return HamiltonianCycle10x10()
 
 
-def certified_action_mask(planner: Any, env: SnakeEnv) -> tuple[bool, ...]:
-    """把规划器认证结果转换为与三个相对动作一一对应的布尔掩码。"""
+def certified_action_mask(
+    certifier: HamiltonianCycle10x10,
+    env: SnakeEnv,
+) -> tuple[bool, ...]:
+    """把轻量 Hamiltonian 生存性认证结果转换为三个动作的布尔掩码。"""
 
     from snake_ai.planning_10x10 import PlanningState
 
-    decision = planner.certify(PlanningState.from_env(env))
-    admissible = frozenset(decision.admissible_actions)
+    admissible = frozenset(
+        certifier.viability_safe_actions(
+            PlanningState.from_env(env),
+            starvation_limit=env.starvation_limit,
+        )
+    )
     mask = tuple(action in admissible for action in range(env.action_size))
     if not any(mask):
-        raise RuntimeError("strict mask planner returned no certified action")
+        raise RuntimeError("Hamiltonian viability mask returned no certified action")
     return mask
 
 
@@ -353,7 +358,7 @@ def main() -> None:
     args = parse_args()
     train_config, env_config = build_configs(args)
     set_seed(train_config.seed, deterministic=args.deterministic)
-    mask_planner = build_mask_planner(args)
+    mask_certifier = build_mask_certifier(args)
 
     # 假设你在 2026 年 7 月 7 日 下午 3 点 30 分 45 秒 执行了这行代码
     # 最后生成的 run_name 字符串就会是"dqn_20260707_153045"
@@ -445,6 +450,9 @@ def main() -> None:
         seed=train_config.seed,
         starvation_enabled=args.mask,
         state_mode=args.state_mode,
+        # 普通训练保持原有 validation 默认奖励语义；masked 10×10 必须与
+        # experiment8 的固定 100 步、严格大于才饿死的边界一致。
+        reward_profile=args.reward_profile if args.mask else "reference",
     )
     quick_seeds = make_episode_seeds(
         train_config.seed,
@@ -486,16 +494,17 @@ def main() -> None:
             "quick_seed_start": quick_seeds[0],
             "confirmation_seed_start": confirmation_seeds[0],
             "selection_thresholds": asdict(DEFAULT_SELECTION_THRESHOLDS),
-            "starvation_enabled": False,
+            "starvation_enabled": validation_env.starvation_enabled,
         },
         "deterministic": args.deterministic,
     }
     if args.mask:
         run_config["mask"] = {
             "enabled": True,
-            "version": 1,
-            "planner": "hamiltonian_tail_safe_astar_viability",
-            "max_astar_expansions": args.mask_max_astar_expansions,
+            "version": 2,
+            "planner": "hamiltonian_viability",
+            "starvation_limit_mode": "board_area",
+            "astar_enabled": False,
             "empty_mask_fallback": False,
         }
     config_text = json.dumps(run_config, ensure_ascii=False, indent=2) + "\n"
@@ -608,11 +617,11 @@ def main() -> None:
                 f"stage={seed_set} episodes={len(seeds)}"
             )
             if args.mask:
-                if mask_planner is None:
-                    raise RuntimeError("masked validation requires an initialized planner")
+                if mask_certifier is None:
+                    raise RuntimeError("masked validation requires an initialized certifier")
 
                 def select_masked_action(observation: Any, live_env: SnakeEnv) -> int:
-                    safe_mask = certified_action_mask(mask_planner, live_env)
+                    safe_mask = certified_action_mask(mask_certifier, live_env)
                     return agent.act_masked(observation, safe_mask, training=False)
 
                 result = evaluate_policy(
@@ -725,7 +734,9 @@ def main() -> None:
                 state = env.reset()
                 done = False
                 safe_mask = (
-                    certified_action_mask(mask_planner, env) if mask_planner is not None else None
+                    certified_action_mask(mask_certifier, env)
+                    if mask_certifier is not None
+                    else None
                 )
 
                 # 记录一个episode中所有步的loss
@@ -764,7 +775,7 @@ def main() -> None:
                         next_safe_mask = (
                             terminal_action_mask(env.action_size)
                             if done
-                            else certified_action_mask(mask_planner, env)
+                            else certified_action_mask(mask_certifier, env)
                         )
                         agent.remember_masked(
                             state,

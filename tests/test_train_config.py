@@ -4,9 +4,10 @@ from types import SimpleNamespace
 import pytest
 
 from snake_ai.game import SnakeEnv
+from snake_ai.planning_10x10.hamiltonian import HamiltonianCycle10x10
 from snake_ai.train import (
     build_configs,
-    build_mask_planner,
+    build_mask_certifier,
     certified_action_mask,
     parse_args,
     terminal_action_mask,
@@ -30,7 +31,7 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.validation_max_steps == 1000
     assert args.wandb is False
     assert args.mask is False
-    assert build_mask_planner(args) is None
+    assert build_mask_certifier(args) is None
 
 
 def test_parse_args_enables_wandb_only_when_requested(
@@ -41,7 +42,7 @@ def test_parse_args_enables_wandb_only_when_requested(
     assert parse_args().wandb is True
 
 
-def test_mask_flag_builds_strict_10x10_planner_and_action_mask(
+def test_mask_flag_builds_lightweight_10x10_certifier_and_action_mask(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -52,7 +53,8 @@ def test_mask_flag_builds_strict_10x10_planner_and_action_mask(
     args = parse_args()
 
     build_configs(args)
-    planner = build_mask_planner(args)
+    certifier = build_mask_certifier(args)
+    assert type(certifier) is HamiltonianCycle10x10
     env = SnakeEnv(
         width=10,
         height=10,
@@ -61,7 +63,7 @@ def test_mask_flag_builds_strict_10x10_planner_and_action_mask(
         reward_profile="experiment8",
     )
     try:
-        mask = certified_action_mask(planner, env)
+        mask = certified_action_mask(certifier, env)
     finally:
         env.close()
 
@@ -78,7 +80,6 @@ def test_mask_flag_builds_strict_10x10_planner_and_action_mask(
         ["--width", "6", "--height", "6"],
         ["--width", "10", "--height", "10", "--state-mode", "grid"],
         ["--width", "10", "--height", "10", "--reward-profile", "reference"],
-        ["--width", "10", "--height", "10", "--mask-max-astar-expansions", "0"],
     ],
 )
 def test_mask_flag_rejects_incompatible_training_config(
@@ -91,10 +92,10 @@ def test_mask_flag_rejects_incompatible_training_config(
         build_configs(parse_args())
 
 
-def test_disabled_mask_returns_before_reading_planner_arguments() -> None:
+def test_disabled_mask_returns_before_building_certifier() -> None:
     args = SimpleNamespace(mask=False)
 
-    assert build_mask_planner(args) is None
+    assert build_mask_certifier(args) is None
 
 
 def test_build_configs_matches_environment_minimum_size(

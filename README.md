@@ -149,7 +149,7 @@ bash scripts/train_autodl.sh --width 10 --height 10
 .\scripts\train_autodl.ps1 --width 10 --height 10
 ```
 
-10×10 Hamiltonian + tail-safe A* 安全掩码训练必须显式加入 `--mask`：
+10×10 轻量 Hamiltonian 生存性掩码训练必须显式加入 `--mask`：
 
 ```bash
 bash scripts/train_autodl.sh --mask --width 10 --height 10
@@ -157,6 +157,7 @@ bash scripts/train_autodl.sh --mask --width 10 --height 10
 
 `--mask` 默认关闭，并且只接受 10×10、Hybrid、`experiment8` 配置；不带该参数时不会创建
 规划器，原 6×6 的动作选择、经验回放、TD 目标、验证默认值和 checkpoint 结构保持不变。
+训练与周期验证不会运行 A*；独立正式推理仍使用 Hamiltonian + tail-safe A* 完整规划器。
 完整原理与 checkpoint 区分见
 [10×10 安全规划器说明](docs/planning_10x10_hamiltonian_astar_guide.md)。
 

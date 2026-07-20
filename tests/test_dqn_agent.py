@@ -307,8 +307,8 @@ def test_masked_checkpoint_is_explicit_and_rejects_plain_checkpoint(tmp_path) ->
     checkpoint = torch.load(masked_path, map_location="cpu")
 
     assert checkpoint["mask_enabled"] is True
-    assert checkpoint["mask_version"] == 1
-    assert checkpoint["mask_planner"] == "hamiltonian_tail_safe_astar_viability"
+    assert checkpoint["mask_version"] == 2
+    assert checkpoint["mask_planner"] == "hamiltonian_viability"
     MaskedDQNAgent(state_size=20, action_size=3, seed=2, device="cpu").load(masked_path)
     with pytest.raises(ValueError, match="mask_enabled=true"):
         MaskedDQNAgent(state_size=20, action_size=3, seed=2, device="cpu").load(plain_path)

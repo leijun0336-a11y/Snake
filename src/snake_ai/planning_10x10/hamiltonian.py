@@ -72,6 +72,51 @@ class HamiltonianCycle10x10:
                 safe.append(action)
         return tuple(safe)
 
+    def forward_distance(self, start: Point, target: Point) -> int:
+        """返回沿固定环从 ``start`` 前进到 ``target`` 所需的步数。"""
+
+        return (self.index_by_point[target] - self.index_by_point[start]) % len(self.cells)
+
+    def viability_safe_actions(
+        self,
+        state: PlanningState,
+        *,
+        starvation_limit: int,
+    ) -> tuple[int, ...]:
+        """认证一步捷径后仍能在饿死前沿 Hamiltonian 环吃到当前食物。
+
+        这里不运行 A*。每个候选动作只精确模拟一步；若它保持蛇身沿环有序，后续就有
+        一条可构造的恢复路线：始终走环后继直到食物。恢复路线长度可以用环编号之差
+        O(1) 算出，因此适合在 DQN 训练的每一步调用。
+        """
+
+        if starvation_limit < 1:
+            raise ValueError("starvation_limit must be positive")
+        if not self.is_state_compatible(state) or state.food is None:
+            return ()
+
+        # experiment8 在 steps_since_food > limit 时饿死，所以当前还能执行
+        # limit - steps_since_food + 1 步；最后一步若吃到食物会先把计数清零。
+        max_actions_to_food = starvation_limit - state.steps_since_food + 1
+        if max_actions_to_food < 1:
+            return ()
+
+        safe: list[int] = []
+        for action in (0, 1, 2):
+            transition = simulate_action(state, action)
+            if transition.collision or transition.next_state is None:
+                continue
+            if not self.is_state_compatible(transition.next_state):
+                continue
+            if transition.ate_food:
+                safe.append(action)
+                continue
+
+            remaining = self.forward_distance(transition.next_state.head, state.food)
+            if 1 + remaining <= max_actions_to_food:
+                safe.append(action)
+        return tuple(safe)
+
     def successor(self, point: Point) -> Point:
         index = self.index_by_point[point]
         return self.cells[(index + 1) % len(self.cells)]

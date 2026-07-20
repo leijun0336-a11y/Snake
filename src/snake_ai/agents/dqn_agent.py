@@ -401,8 +401,8 @@ class DQNAgent:
 class MaskedDQNAgent(DQNAgent):
     """10×10 安全掩码训练专用 Agent；普通 DQNAgent 的行为保持原样。"""
 
-    MASK_VERSION = 1
-    MASK_PLANNER = "hamiltonian_tail_safe_astar_viability"
+    MASK_VERSION = 2
+    MASK_PLANNER = "hamiltonian_viability"
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
