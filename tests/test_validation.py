@@ -104,6 +104,84 @@ def test_quick_and_confirmation_thresholds() -> None:
     )
 
 
+def test_step_efficiency_is_opt_in_and_cannot_hide_safety_loss() -> None:
+    quick = make_result("quick", episodes=100, mean_score=97.0, full_rate=1.0)
+    confirmation = make_result(
+        "confirmation",
+        episodes=500,
+        mean_score=97.0,
+        full_rate=1.0,
+    )
+    faster_quick = replace(quick, mean_steps=80.0)
+    faster_confirmation = replace(confirmation, mean_steps=80.0)
+
+    assert not passes_quick_screen(faster_quick, quick)
+    assert not passes_confirmation(faster_confirmation, confirmation)
+    assert passes_quick_screen(faster_quick, quick, prefer_fewer_steps=True)
+    assert passes_confirmation(
+        faster_confirmation,
+        confirmation,
+        prefer_fewer_steps=True,
+    )
+    assert not passes_quick_screen(
+        replace(faster_quick, full_rate=0.99),
+        quick,
+        prefer_fewer_steps=True,
+    )
+    assert not passes_confirmation(
+        replace(faster_confirmation, full_rate=0.99),
+        confirmation,
+        prefer_fewer_steps=True,
+    )
+    assert not passes_quick_screen(
+        replace(faster_quick, mean_score=96.9),
+        quick,
+        prefer_fewer_steps=True,
+    )
+    assert not passes_confirmation(
+        replace(faster_confirmation, mean_score=96.9),
+        confirmation,
+        prefer_fewer_steps=True,
+    )
+
+
+def test_staged_validation_promotes_faster_equally_safe_masked_candidate() -> None:
+    best_quick = make_result("quick", episodes=100, mean_score=97.0, full_rate=1.0)
+    best_confirmation = make_result(
+        "confirmation",
+        episodes=500,
+        mean_score=97.0,
+        full_rate=1.0,
+    )
+    candidates = {
+        "quick": replace(best_quick, mean_steps=80.0),
+        "confirmation": replace(best_confirmation, mean_steps=80.0),
+    }
+    state = StagedValidationState(
+        selection_start_episode=100,
+        best_quick=best_quick,
+        best_confirmation=best_confirmation,
+        best_training_episode=100,
+    )
+
+    decision = run_staged_validation(
+        episode=600,
+        epsilon=0.01,
+        epsilon_end=0.01,
+        state=state,
+        evaluator=candidates.__getitem__,
+        interval=500,
+        early_stop_enabled=False,
+        min_episodes=1,
+        patience=8,
+        target_mean_score=None,
+        prefer_fewer_steps=True,
+    )
+
+    assert decision.best_updated is True
+    assert state.best_training_episode == 600
+
+
 @pytest.mark.parametrize(
     ("mean_delta", "full_rate_delta"),
     [
@@ -128,14 +206,9 @@ def test_six_by_six_quick_selection_exactly_matches_legacy_logic(
     thresholds = DEFAULT_SELECTION_THRESHOLDS
     legacy_mean_delta = candidate.mean_score - incumbent.mean_score
     legacy_full_rate_delta = candidate.full_rate - incumbent.full_rate
-    legacy_result = (
-        legacy_mean_delta + COMPARISON_EPSILON >= thresholds.quick_mean_delta
-        or (
-            legacy_mean_delta + COMPARISON_EPSILON
-            >= -thresholds.quick_mean_tolerance
-            and legacy_full_rate_delta + COMPARISON_EPSILON
-            >= thresholds.quick_full_rate_delta
-        )
+    legacy_result = legacy_mean_delta + COMPARISON_EPSILON >= thresholds.quick_mean_delta or (
+        legacy_mean_delta + COMPARISON_EPSILON >= -thresholds.quick_mean_tolerance
+        and legacy_full_rate_delta + COMPARISON_EPSILON >= thresholds.quick_full_rate_delta
     )
 
     assert passes_quick_screen(candidate, incumbent) is legacy_result
@@ -171,11 +244,9 @@ def test_six_by_six_confirmation_selection_exactly_matches_legacy_logic(
     legacy_mean_delta = candidate.mean_score - incumbent.mean_score
     legacy_full_rate_delta = candidate.full_rate - incumbent.full_rate
     legacy_result = (
-        legacy_mean_delta + COMPARISON_EPSILON
-        >= thresholds.confirmation_mean_delta
+        legacy_mean_delta + COMPARISON_EPSILON >= thresholds.confirmation_mean_delta
         or (
-            abs(legacy_mean_delta)
-            <= thresholds.confirmation_mean_tolerance + COMPARISON_EPSILON
+            abs(legacy_mean_delta) <= thresholds.confirmation_mean_tolerance + COMPARISON_EPSILON
             and legacy_full_rate_delta + COMPARISON_EPSILON
             >= thresholds.confirmation_full_rate_delta
         )
@@ -282,20 +353,14 @@ def test_six_by_six_selection_matches_legacy_over_dense_boundary_grid(
             legacy_mean_delta = candidate.mean_score - incumbent.mean_score
             legacy_rate_delta = candidate.full_rate - incumbent.full_rate
             if selector is passes_quick_screen:
-                expected = (
-                    legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold
-                    or (
-                        legacy_mean_delta + COMPARISON_EPSILON >= -mean_tolerance
-                        and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
-                    )
+                expected = legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold or (
+                    legacy_mean_delta + COMPARISON_EPSILON >= -mean_tolerance
+                    and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
                 )
             else:
-                expected = (
-                    legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold
-                    or (
-                        abs(legacy_mean_delta) <= mean_tolerance + COMPARISON_EPSILON
-                        and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
-                    )
+                expected = legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold or (
+                    abs(legacy_mean_delta) <= mean_tolerance + COMPARISON_EPSILON
+                    and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
                 )
 
             assert selector(candidate, incumbent) is expected
@@ -585,6 +650,25 @@ def test_evaluate_policy_reseeds_each_episode_and_restores_model_mode() -> None:
     assert result.timeout_games == 2
     assert result.full_score == 33
     assert agent.policy_net.training is True
+    env.close()
+
+
+def test_evaluate_policy_uses_explicit_action_selector_when_provided() -> None:
+    agent = StraightAgent()
+    env = SnakeEnv(width=6, height=6, seed=1, starvation_enabled=False)
+    selected_widths: list[int] = []
+
+    result = evaluate_policy(
+        agent,
+        env,
+        (101,),
+        seed_set="quick",
+        max_steps=2,
+        action_selector=lambda _, live_env: selected_widths.append(live_env.width) or 0,
+    )
+
+    assert result.episodes == 1
+    assert selected_widths == [6, 6]
     env.close()
 
 

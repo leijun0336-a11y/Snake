@@ -81,6 +81,7 @@ class SelectionThresholds:
 
 DEFAULT_SELECTION_THRESHOLDS = SelectionThresholds()
 
+
 # 验证阶段的事件记录
 @dataclass(frozen=True)
 class ValidationEvent:
@@ -109,6 +110,7 @@ class StagedValidationDecision:
     best_updated: bool = False
     stop_reason: Literal["target_validation", "validation_patience"] | None = None
 
+
 # 不同的验证阶段使用不同的随机种子
 def make_episode_seeds(
     base_seed: int,
@@ -122,7 +124,7 @@ def make_episode_seeds(
         raise ValueError(
             f"validation episodes must be less than {SEED_SET_STRIDE} to keep seed sets disjoint"
         )
-    
+
     # 种子计算方法：基础种子值+之前定义的种子集合索引*步长
     start = base_seed + SEED_SET_INDEX[seed_set] * SEED_SET_STRIDE
     # 返回一个元组，包含从 start 开始的连续整数，长度为 episodes
@@ -174,7 +176,7 @@ def validation_patience_exhausted(current_rounds: int, patience: int) -> bool:
 # 当前模型是否成为新的最佳模型
 # 是否因为达到目标或长期无改进而停止训练
 def run_staged_validation(
-    *,            # `*` 后面的参数必须通过“参数名=值”的方式传入。
+    *,  # `*` 后面的参数必须通过“参数名=值”的方式传入。
     episode: int,
     epsilon: float,
     epsilon_end: float,
@@ -186,6 +188,7 @@ def run_staged_validation(
     patience: int,
     target_mean_score: float | None,
     thresholds: SelectionThresholds = DEFAULT_SELECTION_THRESHOLDS,
+    prefer_fewer_steps: bool = False,
 ) -> StagedValidationDecision:
 
     if state.selection_start_episode is None:
@@ -225,7 +228,12 @@ def run_staged_validation(
         raise RuntimeError("best validation baselines were not initialized")
 
     quick = evaluator("quick")
-    quick_passed = passes_quick_screen(quick, state.best_quick, thresholds)
+    quick_passed = passes_quick_screen(
+        quick,
+        state.best_quick,
+        thresholds,
+        prefer_fewer_steps=prefer_fewer_steps,
+    )
     confirmation: ValidationResult | None = None
     promoted = False
     best_updated = False
@@ -237,6 +245,7 @@ def run_staged_validation(
             confirmation,
             state.best_confirmation,
             thresholds,
+            prefer_fewer_steps=prefer_fewer_steps,
         )
         if promoted:
             _promote(state, episode, quick, confirmation)
@@ -287,6 +296,7 @@ def run_staged_validation(
             confirmation,
             state.best_confirmation,
             thresholds,
+            prefer_fewer_steps=prefer_fewer_steps,
         )
         if promoted:
             _promote(state, episode, quick, confirmation)
@@ -325,14 +335,23 @@ def passes_quick_screen(
     candidate: ValidationResult,
     incumbent: ValidationResult,
     thresholds: SelectionThresholds = DEFAULT_SELECTION_THRESHOLDS,
+    *,
+    prefer_fewer_steps: bool = False,
 ) -> bool:
     _require_comparable(candidate, incumbent, "quick")
     mean_delta = _selection_mean_delta(candidate, incumbent)
     full_rate_delta = candidate.full_rate - incumbent.full_rate
-    return _gte(mean_delta, thresholds.quick_mean_delta) or (
+    score_or_completion_improved = _gte(mean_delta, thresholds.quick_mean_delta) or (
         _gte(mean_delta, -thresholds.quick_mean_tolerance)
         and _gte(full_rate_delta, thresholds.quick_full_rate_delta)
     )
+    steps_improved_without_safety_loss = (
+        prefer_fewer_steps
+        and _gte(mean_delta, 0.0)
+        and _gte(full_rate_delta, 0.0)
+        and candidate.mean_steps < incumbent.mean_steps - COMPARISON_EPSILON
+    )
+    return score_or_completion_improved or steps_improved_without_safety_loss
 
 
 # 判断候选模型是否通过正式确认验证，并取代当前最佳模型。
@@ -341,14 +360,23 @@ def passes_confirmation(
     candidate: ValidationResult,
     incumbent: ValidationResult,
     thresholds: SelectionThresholds = DEFAULT_SELECTION_THRESHOLDS,
+    *,
+    prefer_fewer_steps: bool = False,
 ) -> bool:
     _require_comparable(candidate, incumbent, "confirmation")
     mean_delta = _selection_mean_delta(candidate, incumbent)
     full_rate_delta = candidate.full_rate - incumbent.full_rate
-    return _gte(mean_delta, thresholds.confirmation_mean_delta) or (
+    score_or_completion_improved = _gte(mean_delta, thresholds.confirmation_mean_delta) or (
         abs(mean_delta) <= thresholds.confirmation_mean_tolerance + COMPARISON_EPSILON
         and _gte(full_rate_delta, thresholds.confirmation_full_rate_delta)
     )
+    steps_improved_without_safety_loss = (
+        prefer_fewer_steps
+        and _gte(mean_delta, 0.0)
+        and _gte(full_rate_delta, 0.0)
+        and candidate.mean_steps < incumbent.mean_steps - COMPARISON_EPSILON
+    )
+    return score_or_completion_improved or steps_improved_without_safety_loss
 
 
 # 让当前模型在固定的一组随机种子下，以纯贪心策略运行多局游戏，并汇总评估指标。
@@ -361,6 +389,7 @@ def evaluate_policy(
     seed_set: SeedSetName,
     max_steps: int,
     on_episode: Callable[[int, ValidationEpisode], None] | None = None,
+    action_selector: Callable[[Any, SnakeEnv], int] | None = None,
 ) -> ValidationResult:
     """Evaluate a frozen greedy policy without mutating training state."""
 
@@ -394,7 +423,11 @@ def evaluate_policy(
             evaluation_steps = 0
 
             while not done and evaluation_steps < max_steps:
-                action = agent.act(state, training=False)
+                action = (
+                    agent.act(state, training=False)
+                    if action_selector is None
+                    else action_selector(state, env)
+                )
                 state, _, done, info = env.step(action)
                 evaluation_steps += 1
                 max_snake_length = max(
@@ -477,10 +510,7 @@ def _selection_mean_delta(
     if full_score == SELECTION_REFERENCE_FULL_SCORE:
         # 保留历史 6x6 的原始减法路径，避免额外除法和乘法引入任何浮点差异。
         return candidate.mean_score - incumbent.mean_score
-    completion_delta = (
-        candidate.mean_score / full_score
-        - incumbent.mean_score / full_score
-    )
+    completion_delta = candidate.mean_score / full_score - incumbent.mean_score / full_score
     return completion_delta * SELECTION_REFERENCE_FULL_SCORE
 
 
