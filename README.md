@@ -65,6 +65,10 @@ scripts/
 └── evaluate.sh / .ps1
 ```
 
+10×10 的 Hamiltonian + tail-safe A* 推理规划器位于独立并列分支，不改动当前
+6×6 游戏 AI。原理、数学条件、代码流程、运行方法和性能说明见
+[10×10 推理规划器说明](docs/planning_10x10_hamiltonian_astar_guide.md)。
+
 ## 安装与测试
 
 项目要求 Python 3.12+。游戏环境与 GPU 训练环境使用互斥的 PyTorch 依赖，避免训练时误用 CPU 版。只运行游戏、加载 checkpoint 和进行 AI 推理时选择 `cpu`：
