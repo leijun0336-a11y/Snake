@@ -22,22 +22,6 @@ class Transition:
     done: bool
 
 
-SafeMask = tuple[bool, ...]
-
-
-@dataclass(frozen=True)
-class MaskedTransition:
-    """仅供 Masked DQN 使用的经验；普通经验结构保持不变。"""
-
-    state: Any
-    action: int
-    reward: float
-    next_state: Any
-    done: bool
-    safe_mask: SafeMask
-    next_safe_mask: SafeMask
-
-
 class ReplayBuffer:
     def __init__(self, capacity: int, seed: int | None = None) -> None:
         # capacity 表示经验池最多保存多少条经验，必须是正数。
@@ -81,71 +65,3 @@ class ReplayBuffer:
     def __len__(self) -> int:
         # 让 len(buffer) 返回已写入经验数，而不是预分配列表容量。
         return self.size
-
-
-class MaskedReplayBuffer:
-    """与普通 ReplayBuffer 隔离，避免改变历史训练经验的字段和采样路径。"""
-
-    def __init__(self, capacity: int, action_size: int, seed: int | None = None) -> None:
-        if capacity <= 0:
-            raise ValueError("capacity must be positive")
-        if action_size <= 0:
-            raise ValueError("action_size must be positive")
-        self.capacity = capacity
-        self.action_size = action_size
-        self.memory: list[MaskedTransition | None] = [None] * capacity
-        self.position = 0
-        self.size = 0
-        self.random = random.Random(seed)
-
-    def push(
-        self,
-        state: Any,
-        action: int,
-        reward: float,
-        next_state: Any,
-        done: bool,
-        safe_mask: SafeMask,
-        next_safe_mask: SafeMask,
-    ) -> None:
-        current_mask = self._validate_mask(safe_mask, "safe_mask")
-        following_mask = self._validate_mask(next_safe_mask, "next_safe_mask")
-        if not 0 <= action < self.action_size:
-            raise ValueError("action is out of range")
-        if not current_mask[action]:
-            raise ValueError("masked replay cannot store an uncertified action")
-
-        self.memory[self.position] = MaskedTransition(
-            state=state,
-            action=action,
-            reward=reward,
-            next_state=next_state,
-            done=done,
-            safe_mask=current_mask,
-            next_safe_mask=following_mask,
-        )
-        self.position = (self.position + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
-
-    def sample(self, batch_size: int) -> list[MaskedTransition]:
-        if batch_size > self.size:
-            raise ValueError("batch_size cannot be larger than buffer length")
-        indices = self.random.sample(range(self.size), batch_size)
-        batch: list[MaskedTransition] = []
-        for index in indices:
-            transition = self.memory[index]
-            if transition is None:
-                raise RuntimeError("Masked replay buffer contains an uninitialized slot")
-            batch.append(transition)
-        return batch
-
-    def __len__(self) -> int:
-        return self.size
-
-    def _validate_mask(self, mask: SafeMask, name: str) -> SafeMask:
-        normalized = tuple(bool(value) for value in mask)
-        if len(normalized) != self.action_size:
-            raise ValueError(f"{name} must contain exactly {self.action_size} values")
-        if not any(normalized):
-            raise ValueError(f"{name} must certify at least one action")
-        return normalized

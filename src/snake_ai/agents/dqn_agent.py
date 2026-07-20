@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import nn, optim
 
-from snake_ai.agents.replay_buffer import MaskedReplayBuffer, ReplayBuffer, SafeMask
+from snake_ai.agents.replay_buffer import ReplayBuffer
 from snake_ai.models.q_network import QNetwork
 
 
@@ -83,7 +83,7 @@ class DQNAgent:
         self.learn_steps = 0
         self.random = random.Random(seed)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-
+        
         # 生成随机数种子
         torch.manual_seed(seed)
         self.policy_net = self._build_network()
@@ -101,7 +101,7 @@ class DQNAgent:
     # 动作采样，DQN采用epsilon-greedy
     def act(self, state: Any, training: bool = True) -> int:
         # state: 输入的状态；training:是否训练，评估模式不探索。
-
+        
         # 如果正在训练且落入epsilon概率内
         if training and self.random.random() < self.epsilon:
             return self.random.randrange(self.action_size)
@@ -140,12 +140,8 @@ class DQNAgent:
 
         # 提取batch中的信息
         states = self._state_batch_to_tensor([item.state for item in batch])
-        actions = torch.tensor(
-            [item.action for item in batch], dtype=torch.long, device=self.device
-        )
-        rewards = torch.tensor(
-            [item.reward for item in batch], dtype=torch.float32, device=self.device
-        )
+        actions = torch.tensor([item.action for item in batch], dtype=torch.long, device=self.device)
+        rewards = torch.tensor([item.reward for item in batch], dtype=torch.float32, device=self.device)
         next_states = self._state_batch_to_tensor([item.next_state for item in batch])
         dones = torch.tensor([item.done for item in batch], dtype=torch.float32, device=self.device)
 
@@ -154,11 +150,12 @@ class DQNAgent:
         # gather(1, ...): 取出每条经验中实际执行动作的 Q 值
         # squeeze(1): 把结果从 [batch_size, 1] 变成 [batch_size]
         current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-
+        
         # 基于时序差分学习和贝尔曼最优方程
         # 将当前 $Q$ 值拆解为当前奖励与未来最大 $Q$ 值的组合，并利用时序差分学习（TD）通过时序差分（TD Error）来逐步修正和逼近这个最优目标
         # 计算td_target作为标签，计算标签的过程不加入计算图
         with torch.no_grad():
+            
             next_actions = self.policy_net(next_states).argmax(dim=1)
             # Double DQN: 把 next_states 传给 target_net 来计算 Q(s', a')，而不是直接用 policy_net 的最大 Q 值
             # Y_t = R_{t+1} + gamma * Q_target(s_{t+1}, argmax_a Q_net(s_{t+1}, a))
@@ -179,7 +176,7 @@ class DQNAgent:
 
         # 在经验池完全充足的情况下，蛇每走一格就learn_steps+1
         self.learn_steps += 1
-
+        
         # 每隔一段时间更新目标网络
         if self.learn_steps % self.target_update_interval == 0:
             self.update_target_network()
@@ -196,7 +193,9 @@ class DQNAgent:
             raise ValueError("episode is required when using linear epsilon decay")
         progress = min(max(episode, 0) / self.epsilon_linear_episodes, 1.0)
         epsilon_range = self.epsilon_start - self.epsilon_end
-        self.epsilon = max(self.epsilon_end, self.epsilon_start - epsilon_range * progress)
+        self.epsilon = max(
+            self.epsilon_end, self.epsilon_start - epsilon_range * progress
+        )
 
     # 更新目标网络
     def update_target_network(self) -> None:
@@ -222,7 +221,9 @@ class DQNAgent:
         if self.state_mode == "hybrid":
             # Hybrid replay 中每条 state 都是 (grid, 20维人工状态)，分别组成两个 batch。
             grids = self._grid_batch_to_tensor([state[0] for state in states])
-            auxiliary_array = np.asarray([state[1] for state in states], dtype=np.float32)
+            auxiliary_array = np.asarray(
+                [state[1] for state in states], dtype=np.float32
+            )
             auxiliary_states = self._numpy_to_tensor(auxiliary_array)
             return grids, auxiliary_states
         if self.state_mode == "grid":
@@ -287,13 +288,7 @@ class DQNAgent:
         }
         if metadata is not None:
             checkpoint["run_config"] = metadata
-        checkpoint.update(self._extra_checkpoint_fields())
         torch.save(checkpoint, path)
-
-    def _extra_checkpoint_fields(self) -> dict[str, Any]:
-        """子类可追加元数据；普通 DQN 返回空字典，checkpoint 内容保持原样。"""
-
-        return {}
 
     # 从文件里恢复模型状态
     def load(self, path: str | Path) -> None:
@@ -361,7 +356,9 @@ class DQNAgent:
         checkpoint_auxiliary_size = int(checkpoint["auxiliary_size"])
         checkpoint_cnn_channels = int(checkpoint["cnn_channels"])
         checkpoint_cnn_output_channels = int(checkpoint["cnn_output_channels"])
-        checkpoint_cnn_dilations = tuple(int(value) for value in checkpoint["cnn_dilations"])
+        checkpoint_cnn_dilations = tuple(
+            int(value) for value in checkpoint["cnn_dilations"]
+        )
         if checkpoint_state_mode == "hybrid" and checkpoint_auxiliary_size != self.auxiliary_size:
             raise ValueError(
                 f"Checkpoint auxiliary_size={checkpoint_auxiliary_size} does not match "
@@ -396,120 +393,3 @@ class DQNAgent:
         self.epsilon_exp_factor = float(checkpoint["epsilon_exp_factor"])
         self.epsilon_linear_episodes = int(checkpoint["epsilon_linear_episodes"])
         self.learn_steps = int(checkpoint["learn_steps"])
-
-
-class MaskedDQNAgent(DQNAgent):
-    """10×10 安全掩码训练专用 Agent；普通 DQNAgent 的行为保持原样。"""
-
-    MASK_VERSION = 2
-    MASK_PLANNER = "hamiltonian_viability"
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.replay_buffer = MaskedReplayBuffer(
-            self.replay_buffer.capacity,
-            self.action_size,
-            seed=kwargs.get("seed", 42),
-        )
-
-    def act_masked(
-        self,
-        state: Any,
-        safe_mask: SafeMask,
-        *,
-        training: bool = True,
-    ) -> int:
-        mask = self._validate_safe_mask(safe_mask)
-        safe_actions = tuple(index for index, allowed in enumerate(mask) if allowed)
-        if training and self.random.random() < self.epsilon:
-            return self.random.choice(safe_actions)
-
-        with torch.no_grad():
-            state_tensor = self._state_batch_to_tensor([state])
-            q_values = self.policy_net(state_tensor)
-            mask_tensor = torch.tensor(mask, dtype=torch.bool, device=self.device).unsqueeze(0)
-            masked_q = q_values.masked_fill(~mask_tensor, -torch.inf)
-            return int(masked_q.argmax(dim=1).item())
-
-    def remember_masked(
-        self,
-        state: Any,
-        action: int,
-        reward: float,
-        next_state: Any,
-        done: bool,
-        safe_mask: SafeMask,
-        next_safe_mask: SafeMask,
-    ) -> None:
-        self.replay_buffer.push(
-            state,
-            action,
-            reward,
-            next_state,
-            done,
-            safe_mask,
-            next_safe_mask,
-        )
-
-    def learn(self) -> float | None:
-        if len(self.replay_buffer) < self.batch_size:
-            return None
-
-        batch = self.replay_buffer.sample(self.batch_size)
-        states = self._state_batch_to_tensor([item.state for item in batch])
-        actions = torch.tensor(
-            [item.action for item in batch], dtype=torch.long, device=self.device
-        )
-        rewards = torch.tensor(
-            [item.reward for item in batch], dtype=torch.float32, device=self.device
-        )
-        next_states = self._state_batch_to_tensor([item.next_state for item in batch])
-        dones = torch.tensor([item.done for item in batch], dtype=torch.float32, device=self.device)
-        next_safe_masks = torch.tensor(
-            [item.next_safe_mask for item in batch], dtype=torch.bool, device=self.device
-        )
-
-        current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-        with torch.no_grad():
-            next_online_q = self.policy_net(next_states)
-            next_actions = next_online_q.masked_fill(~next_safe_masks, -torch.inf).argmax(dim=1)
-            next_q = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
-            target_q = rewards + self.gamma * next_q * (1.0 - dones)
-
-        loss = self.loss_fn(current_q, target_q)
-        self.optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
-        self.optimizer.step()
-
-        self.learn_steps += 1
-        if self.learn_steps % self.target_update_interval == 0:
-            self.update_target_network()
-        return float(loss.item())
-
-    def _extra_checkpoint_fields(self) -> dict[str, Any]:
-        return {
-            "mask_enabled": True,
-            "mask_version": self.MASK_VERSION,
-            "mask_planner": self.MASK_PLANNER,
-        }
-
-    def load(self, path: str | Path) -> None:
-        checkpoint = torch.load(path, map_location=self.device)
-        if checkpoint.get("mask_enabled") is not True:
-            raise ValueError("masked training requires a checkpoint with mask_enabled=true")
-        if checkpoint.get("mask_version") != self.MASK_VERSION:
-            raise ValueError(
-                f"masked checkpoint version mismatch: {checkpoint.get('mask_version')!r}"
-            )
-        if checkpoint.get("mask_planner") != self.MASK_PLANNER:
-            raise ValueError("masked checkpoint planner metadata does not match this agent")
-        super().load(path)
-
-    def _validate_safe_mask(self, safe_mask: SafeMask) -> SafeMask:
-        normalized = tuple(bool(value) for value in safe_mask)
-        if len(normalized) != self.action_size:
-            raise ValueError(f"safe_mask must contain exactly {self.action_size} values")
-        if not any(normalized):
-            raise ValueError("safe_mask must certify at least one action")
-        return normalized

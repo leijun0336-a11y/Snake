@@ -1,17 +1,8 @@
 import sys
-from types import SimpleNamespace
 
 import pytest
 
-from snake_ai.game import SnakeEnv
-from snake_ai.planning_10x10.hamiltonian import HamiltonianCycle10x10
-from snake_ai.train import (
-    build_configs,
-    build_mask_certifier,
-    certified_action_mask,
-    parse_args,
-    terminal_action_mask,
-)
+from snake_ai.train import build_configs, parse_args
 
 
 def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -30,8 +21,6 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.validation_patience == 8
     assert args.validation_max_steps == 1000
     assert args.wandb is False
-    assert args.mask is False
-    assert build_mask_certifier(args) is None
 
 
 def test_parse_args_enables_wandb_only_when_requested(
@@ -40,62 +29,6 @@ def test_parse_args_enables_wandb_only_when_requested(
     monkeypatch.setattr(sys, "argv", ["train.py", "--wandb"])
 
     assert parse_args().wandb is True
-
-
-def test_mask_flag_builds_lightweight_10x10_certifier_and_action_mask(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["train.py", "--mask", "--width", "10", "--height", "10"],
-    )
-    args = parse_args()
-
-    build_configs(args)
-    certifier = build_mask_certifier(args)
-    assert type(certifier) is HamiltonianCycle10x10
-    env = SnakeEnv(
-        width=10,
-        height=10,
-        seed=1,
-        state_mode="hybrid",
-        reward_profile="experiment8",
-    )
-    try:
-        mask = certified_action_mask(certifier, env)
-    finally:
-        env.close()
-
-    assert args.mask is True
-    assert args.validation_max_steps == 5000
-    assert len(mask) == 3
-    assert any(mask)
-    assert terminal_action_mask(3) == (True, True, True)
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        ["--width", "6", "--height", "6"],
-        ["--width", "10", "--height", "10", "--state-mode", "grid"],
-        ["--width", "10", "--height", "10", "--reward-profile", "reference"],
-    ],
-)
-def test_mask_flag_rejects_incompatible_training_config(
-    monkeypatch: pytest.MonkeyPatch,
-    arguments: list[str],
-) -> None:
-    monkeypatch.setattr(sys, "argv", ["train.py", "--mask", *arguments])
-
-    with pytest.raises(ValueError, match="--mask requires|must be positive"):
-        build_configs(parse_args())
-
-
-def test_disabled_mask_returns_before_building_certifier() -> None:
-    args = SimpleNamespace(mask=False)
-
-    assert build_mask_certifier(args) is None
 
 
 def test_build_configs_matches_environment_minimum_size(

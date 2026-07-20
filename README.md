@@ -65,10 +65,6 @@ scripts/
 └── evaluate.sh / .ps1
 ```
 
-10×10 的 Hamiltonian + tail-safe A* 推理规划器位于独立并列分支，不改动当前
-6×6 游戏 AI。原理、数学条件、代码流程、运行方法和性能说明见
-[10×10 推理规划器说明](docs/planning_10x10_hamiltonian_astar_guide.md)。
-
 ## 安装与测试
 
 项目要求 Python 3.12+。游戏环境与 GPU 训练环境使用互斥的 PyTorch 依赖，避免训练时误用 CPU 版。只运行游戏、加载 checkpoint 和进行 AI 推理时选择 `cpu`：
@@ -148,18 +144,6 @@ bash scripts/train_autodl.sh --width 10 --height 10
 ```powershell
 .\scripts\train_autodl.ps1 --width 10 --height 10
 ```
-
-10×10 轻量 Hamiltonian 生存性掩码训练必须显式加入 `--mask`：
-
-```bash
-bash scripts/train_autodl.sh --mask --width 10 --height 10
-```
-
-`--mask` 默认关闭，并且只接受 10×10、Hybrid、`experiment8` 配置；不带该参数时不会创建
-规划器，原 6×6 的动作选择、经验回放、TD 目标、验证默认值和 checkpoint 结构保持不变。
-训练与周期验证不会运行 A*；独立正式推理仍使用 Hamiltonian + tail-safe A* 完整规划器。
-完整原理与 checkpoint 区分见
-[10×10 安全规划器说明](docs/planning_10x10_hamiltonian_astar_guide.md)。
 
 ### QNetwork 详细架构
 

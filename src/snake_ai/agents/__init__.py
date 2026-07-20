@@ -1,20 +1,6 @@
-from snake_ai.agents.replay_buffer import (
-    MaskedReplayBuffer,
-    MaskedTransition,
-    ReplayBuffer,
-    SafeMask,
-    Transition,
-)
+from snake_ai.agents.replay_buffer import ReplayBuffer, Transition
 
-__all__ = [
-    "DQNAgent",
-    "MaskedDQNAgent",
-    "MaskedReplayBuffer",
-    "MaskedTransition",
-    "ReplayBuffer",
-    "SafeMask",
-    "Transition",
-]
+__all__ = ["DQNAgent", "ReplayBuffer", "Transition"]
 
 
 def __getattr__(name: str):
@@ -22,8 +8,4 @@ def __getattr__(name: str):
         from snake_ai.agents.dqn_agent import DQNAgent
 
         return DQNAgent
-    if name == "MaskedDQNAgent":
-        from snake_ai.agents.dqn_agent import MaskedDQNAgent
-
-        return MaskedDQNAgent
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

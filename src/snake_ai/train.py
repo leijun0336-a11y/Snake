@@ -9,7 +9,6 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 from snake_ai.agents import DQNAgent
 from snake_ai.config import (
@@ -32,15 +31,11 @@ from snake_ai.validation import (
 )
 from snake_ai.wandb_logging import WandbRun, start_wandb, training_metrics
 
-if TYPE_CHECKING:
-    from snake_ai.planning_10x10.hamiltonian import HamiltonianCycle10x10
-
 try:
     from torch.utils.tensorboard import SummaryWriter
 # 如果用户没装 TensorBoard，就让它等于 None
-except ImportError:
+except ImportError:  
     SummaryWriter = None
-
 
 # 解析启动脚本时的命令行参数
 def parse_args() -> argparse.Namespace:
@@ -65,11 +60,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runs-dir", type=Path, default=RUNS_DIR)
     # 选模型：全连接 Vector、卷积 Grid、混合 Hybrid
     parser.add_argument("--state-mode", choices=("vector", "grid", "hybrid"), default="hybrid")
-    parser.add_argument(
-        "--mask",
-        action="store_true",
-        help="enable lightweight 10x10 Hamiltonian viability action masking",
-    )
     # 选奖励配置
     parser.add_argument("--reward-profile", choices=REWARD_PROFILE_NAMES, default="experiment8")
     # 是否使用势函数进度奖励，默认启用；可通过 --no-potential-reward 关闭(argparse内置方法)。
@@ -87,19 +77,10 @@ def parse_args() -> argparse.Namespace:
     # 是否采用指数衰减；默认关闭，即采用线性衰减。
     parser.add_argument("--epsilon-exp-decay", action="store_true")
     # 指数衰减系数；仅在启用 --epsilon-exp-decay 时生效。
-    parser.add_argument(
-        "--epsilon-exp-factor", type=float, default=TrainConfig.epsilon_exp_factor, metavar="FACTOR"
-    )
+    parser.add_argument("--epsilon-exp-factor", type=float, default=TrainConfig.epsilon_exp_factor, metavar="FACTOR")
     # epsilon 线性降至下限所用局数；默认取最大训练局数的一半。
-    parser.add_argument(
-        "--epsilon-linear-episodes",
-        type=int,
-        default=TrainConfig.epsilon_linear_episodes,
-        metavar="N",
-    )
-    parser.add_argument(
-        "--target-update-interval", type=int, default=TrainConfig.target_update_interval
-    )
+    parser.add_argument("--epsilon-linear-episodes", type=int, default=TrainConfig.epsilon_linear_episodes, metavar="N")
+    parser.add_argument("--target-update-interval",type=int,default=TrainConfig.target_update_interval)
     parser.add_argument("--hidden-size", type=int, default=TrainConfig.hidden_size)
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     # 这些参数只影响 Grid/Hybrid 的卷积主干，Vector baseline 会忽略它们。
@@ -107,22 +88,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels)
     parser.add_argument("--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations)
     # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
-    parser.add_argument("--early-stop", action="store_true")
+    parser.add_argument("--early-stop",action="store_true")
     # 至少训练多少局后，才允许基于阶段验证的早停判断生效。
     parser.add_argument("--min-episodes", type=int, default=5000)
     parser.add_argument("--validation-interval", type=int, default=500)
     parser.add_argument("--validation-episodes", type=int, default=100)
     parser.add_argument("--confirmation-episodes", type=int, default=500)
     parser.add_argument("--validation-patience", type=int, default=8)
-    parser.add_argument("--validation-max-steps", type=int, default=None)
+    parser.add_argument("--validation-max-steps", type=int, default=1000)
     # 如果设置了目标平均分，确认验证达到该值后停止训练。
     parser.add_argument("--target-mean-score", type=float, default=None)
-    args = parser.parse_args()
-    # 6×6 历史默认值保持 1000；10×10 masked 验证需要覆盖纯 Hamiltonian
-    # 的 4753 步理论上界，因此默认给 5000。用户显式传值时始终尊重该值。
-    if args.validation_max_steps is None:
-        args.validation_max_steps = 5000 if args.mask else 1000
-    return args
+    return parser.parse_args()
 
 
 def resolve_max_steps_per_episode(args: argparse.Namespace) -> int | None:
@@ -135,10 +111,9 @@ def resolve_max_steps_per_episode(args: argparse.Namespace) -> int | None:
         return None
     return TrainConfig.max_steps_per_episode
 
-
 # 校验训练参数、解析派生默认值，并构造最终配置。
 def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
-
+    
     max_episodes = args.max_episodes
     if max_episodes < 1:
         raise ValueError("max episodes must be at least 1")
@@ -182,13 +157,6 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("CNN channel sizes must be positive")
     if any(dilation <= 0 for dilation in args.cnn_dilations):
         raise ValueError("cnn_dilations must contain positive integers")
-    if args.mask:
-        if (args.width, args.height) != (10, 10):
-            raise ValueError("--mask requires width=10 and height=10")
-        if args.state_mode != "hybrid":
-            raise ValueError("--mask requires state_mode=hybrid")
-        if args.reward_profile != "experiment8":
-            raise ValueError("--mask requires reward_profile=experiment8")
 
     train_config = TrainConfig(
         episodes=max_episodes,
@@ -216,44 +184,6 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         fps=args.fps,
     )
     return train_config, env_config
-
-
-def build_mask_certifier(args: argparse.Namespace) -> HamiltonianCycle10x10 | None:
-    """仅在显式 --mask 时延迟创建轻量 Hamiltonian 认证器。"""
-
-    if not args.mask:
-        return None
-    from snake_ai.planning_10x10.hamiltonian import HamiltonianCycle10x10
-
-    return HamiltonianCycle10x10()
-
-
-def certified_action_mask(
-    certifier: HamiltonianCycle10x10,
-    env: SnakeEnv,
-) -> tuple[bool, ...]:
-    """把轻量 Hamiltonian 生存性认证结果转换为三个动作的布尔掩码。"""
-
-    from snake_ai.planning_10x10 import PlanningState
-
-    admissible = frozenset(
-        certifier.viability_safe_actions(
-            PlanningState.from_env(env),
-            starvation_limit=env.starvation_limit,
-        )
-    )
-    mask = tuple(action in admissible for action in range(env.action_size))
-    if not any(mask):
-        raise RuntimeError("Hamiltonian viability mask returned no certified action")
-    return mask
-
-
-def terminal_action_mask(action_size: int) -> tuple[bool, ...]:
-    """终止状态不参与 bootstrap；使用全真占位以保持 batch 张量合法。"""
-
-    if action_size < 1:
-        raise ValueError("action_size must be positive")
-    return (True,) * action_size
 
 
 # 在训练开始前，打印一份“训练会在什么条件下停止”的概览
@@ -284,7 +214,8 @@ def print_stop_overview(
         print("actual stop condition           : run until max episodes")
     else:
         print(
-            f"early stop eligibility         : epsilon at floor and episode >= {args.min_episodes}"
+            "early stop eligibility         : "
+            f"epsilon at floor and episode >= {args.min_episodes}"
         )
         if args.target_mean_score is None:
             print("target mean score stop          : disabled")
@@ -358,7 +289,6 @@ def main() -> None:
     args = parse_args()
     train_config, env_config = build_configs(args)
     set_seed(train_config.seed, deterministic=args.deterministic)
-    mask_certifier = build_mask_certifier(args)
 
     # 假设你在 2026 年 7 月 7 日 下午 3 点 30 分 45 秒 执行了这行代码
     # 最后生成的 run_name 字符串就会是"dqn_20260707_153045"
@@ -379,7 +309,7 @@ def main() -> None:
 
     # 在指定的文件夹（这里是刚才创建的 run_dir）里新建训练日志文件；.train 后缀方便和评估日志区分。
     writer = SummaryWriter(run_dir, filename_suffix=".train") if SummaryWriter is not None else None
-
+    
     # 训练指标和阶段验证指标分开保存。
     csv_path = run_dir / "train_metrics.csv"
     validation_csv_path = run_dir / "validation_metrics.csv"
@@ -388,11 +318,11 @@ def main() -> None:
         width=env_config.width,
         height=env_config.height,
         # 是否渲染
-        render_mode=args.render,
+        render_mode=args.render,  
         # 每个格子渲染成多少像素
-        cell_size=env_config.cell_size,
+        cell_size=env_config.cell_size,  
         # 渲染帧率，画面刷新速度
-        fps=env_config.fps,
+        fps=env_config.fps,  
         seed=train_config.seed,
         # 环境直接在 reset()/step() 中返回对应 observation，避免训练循环重复构造状态。
         state_mode=args.state_mode,
@@ -401,29 +331,26 @@ def main() -> None:
         cost_rewards=not args.no_cost_rewards,
         reward_gamma=train_config.gamma,
     )
-    agent_class = DQNAgent
-    if args.mask:
-        from snake_ai.agents import MaskedDQNAgent
-
-        agent_class = MaskedDQNAgent
-    agent = agent_class(
+    agent = DQNAgent(
         # 状态维度
         state_size=(
-            env.grid_state_shape if args.state_mode in ("grid", "hybrid") else env.state_size
+            env.grid_state_shape
+            if args.state_mode in ("grid", "hybrid")
+            else env.state_size
         ),
         # 动作维度
-        action_size=env.action_size,
+        action_size=env.action_size, 
         hidden_size=train_config.hidden_size,
         learning_rate=train_config.learning_rate,
         # 折扣率
-        gamma=train_config.gamma,
+        gamma=train_config.gamma,  
         # 经验池大小
-        replay_buffer_size=train_config.replay_buffer_size,
+        replay_buffer_size=train_config.replay_buffer_size,  
         batch_size=train_config.batch_size,
         # 初始epsilon值(Epsilon-Greedy)
-        epsilon_start=train_config.epsilon_start,
+        epsilon_start=train_config.epsilon_start,  
         # epsilon值的下界
-        epsilon_end=train_config.epsilon_end,
+        epsilon_end=train_config.epsilon_end,  
         # 是否采用指数衰减；默认采用线性衰减。
         epsilon_exp_decay=train_config.epsilon_exp_decay,
         # epsilon 的指数衰减系数；仅在指数衰减模式下使用。
@@ -432,7 +359,7 @@ def main() -> None:
         epsilon_linear_episodes=train_config.epsilon_linear_episodes,
         # 隔多少步更新一次目标网络
         # Q训练网络更新一次视为一步，当经验池满后，则等价于贪吃蛇走一步
-        target_update_interval=train_config.target_update_interval,
+        target_update_interval=train_config.target_update_interval,   
         state_mode=args.state_mode,
         # Hybrid 拼接的是完整 get_state()，因此辅助向量维度等于环境 state_size。
         auxiliary_size=env.state_size,
@@ -448,11 +375,8 @@ def main() -> None:
         cell_size=env_config.cell_size,
         fps=env_config.fps,
         seed=train_config.seed,
-        starvation_enabled=args.mask,
+        starvation_enabled=False,
         state_mode=args.state_mode,
-        # 普通训练保持原有 validation 默认奖励语义；masked 10×10 必须与
-        # experiment8 的固定 100 步、严格大于才饿死的边界一致。
-        reward_profile=args.reward_profile if args.mask else "reference",
     )
     quick_seeds = make_episode_seeds(
         train_config.seed,
@@ -494,19 +418,10 @@ def main() -> None:
             "quick_seed_start": quick_seeds[0],
             "confirmation_seed_start": confirmation_seeds[0],
             "selection_thresholds": asdict(DEFAULT_SELECTION_THRESHOLDS),
-            "starvation_enabled": validation_env.starvation_enabled,
+            "starvation_enabled": False,
         },
         "deterministic": args.deterministic,
     }
-    if args.mask:
-        run_config["mask"] = {
-            "enabled": True,
-            "version": 2,
-            "planner": "hamiltonian_viability",
-            "starvation_limit_mode": "board_area",
-            "astar_enabled": False,
-            "empty_mask_fallback": False,
-        }
     config_text = json.dumps(run_config, ensure_ascii=False, indent=2) + "\n"
     (run_dir / "config.json").write_text(config_text, encoding="utf-8")
     (checkpoint_dir / "config.json").write_text(config_text, encoding="utf-8")
@@ -616,30 +531,13 @@ def main() -> None:
                 f"validation_start episode={training_episode} "
                 f"stage={seed_set} episodes={len(seeds)}"
             )
-            if args.mask:
-                if mask_certifier is None:
-                    raise RuntimeError("masked validation requires an initialized certifier")
-
-                def select_masked_action(observation: Any, live_env: SnakeEnv) -> int:
-                    safe_mask = certified_action_mask(mask_certifier, live_env)
-                    return agent.act_masked(observation, safe_mask, training=False)
-
-                result = evaluate_policy(
-                    agent,
-                    validation_env,
-                    seeds,
-                    seed_set=seed_set,
-                    max_steps=args.validation_max_steps,
-                    action_selector=select_masked_action,
-                )
-            else:
-                result = evaluate_policy(
-                    agent,
-                    validation_env,
-                    seeds,
-                    seed_set=seed_set,
-                    max_steps=args.validation_max_steps,
-                )
+            result = evaluate_policy(
+                agent,
+                validation_env,
+                seeds,
+                seed_set=seed_set,
+                max_steps=args.validation_max_steps,
+            )
             print(
                 f"validation_end episode={training_episode} stage={seed_set} "
                 f"mean={result.mean_score:.3f} std={result.score_std:.3f} "
@@ -710,11 +608,7 @@ def main() -> None:
                     "training_episode": training_episode,
                     "quick": quick_result.to_dict(),
                     "confirmation": confirmation_result.to_dict(),
-                    "selection_metric": (
-                        "mean_score_then_full_rate_then_lower_mean_steps"
-                        if args.mask
-                        else "mean_score_then_full_rate"
-                    ),
+                    "selection_metric": "mean_score_then_full_rate",
                     "selection_thresholds": asdict(DEFAULT_SELECTION_THRESHOLDS),
                 },
             }
@@ -733,12 +627,7 @@ def main() -> None:
             for episode in range(1, train_config.episodes + 1):
                 state = env.reset()
                 done = False
-                safe_mask = (
-                    certified_action_mask(mask_certifier, env)
-                    if mask_certifier is not None
-                    else None
-                )
-
+                
                 # 记录一个episode中所有步的loss
                 losses: list[float] = []
                 # 记录一个 episode 中所有 step 的 reward 总和，和 score 分开观察。
@@ -752,16 +641,15 @@ def main() -> None:
                 }
 
                 # 一次episode训练
-                while not done and (
-                    train_config.max_steps_per_episode is None
-                    or env.frame_iteration < train_config.max_steps_per_episode
+                while (
+                    not done
+                    and (
+                        train_config.max_steps_per_episode is None
+                        or env.frame_iteration < train_config.max_steps_per_episode
+                    )
                 ):
                     # 训练时的动作采样
-                    action = (
-                        agent.act(state, training=True)
-                        if safe_mask is None
-                        else agent.act_masked(state, safe_mask, training=True)
-                    )
+                    action = agent.act(state, training=True)
                     # 环境反馈，info是环境额外返回的信息字典，不直接参与DQN更新
                     next_state, reward, done, info = env.step(action)
                     # 累加本局每一步的环境奖励，形成单局累计 reward。
@@ -769,24 +657,7 @@ def main() -> None:
                     for component in reward_components:
                         reward_components[component] += float(info[f"reward_{component}"])
                     # 加入经验回放池
-                    if safe_mask is None:
-                        agent.remember(state, action, reward, next_state, done)
-                    else:
-                        next_safe_mask = (
-                            terminal_action_mask(env.action_size)
-                            if done
-                            else certified_action_mask(mask_certifier, env)
-                        )
-                        agent.remember_masked(
-                            state,
-                            action,
-                            reward,
-                            next_state,
-                            done,
-                            safe_mask,
-                            next_safe_mask,
-                        )
-                        safe_mask = next_safe_mask
+                    agent.remember(state, action, reward, next_state, done)
                     # 智能体更新Q值，如果经验回放池没达到batch_size则返回None
                     loss = agent.learn()
                     if loss is not None:
@@ -845,7 +716,9 @@ def main() -> None:
                     # 最近100局滑动平均累计环境奖励
                     writer.add_scalar("train/mean_reward_100", mean_reward, episode)
                     for component, component_value in reward_components.items():
-                        writer.add_scalar(f"train/reward_{component}", component_value, episode)
+                        writer.add_scalar(
+                            f"train/reward_{component}", component_value, episode
+                        )
                     # 本局存活步数
                     writer.add_scalar("train/episode_steps", episode_steps, episode)
                     # 当前探索率
@@ -894,7 +767,7 @@ def main() -> None:
                         len(agent.replay_buffer),
                     ]
                 )
-
+                
                 # 强制将内存缓冲区（Buffer）中的数据立刻写入到实际的硬盘文件中，防止数据丢失
                 file.flush()
 
@@ -912,7 +785,6 @@ def main() -> None:
                     min_episodes=args.min_episodes,
                     patience=args.validation_patience,
                     target_mean_score=args.target_mean_score,
-                    prefer_fewer_steps=args.mask,
                 )
                 for event in decision.events:
                     record_validation(
