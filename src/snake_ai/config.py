@@ -94,8 +94,7 @@ EXPERIMENT8_REWARD_CONFIG = RewardConfig(
 
 # 把所有奖励配置整理成一个“按名称查找配置”的字典，并生成所有可用配置名称。
 REWARD_CONFIGS = {
-    config.name: config
-    for config in (REFERENCE_REWARD_CONFIG, EXPERIMENT8_REWARD_CONFIG)
+    config.name: config for config in (REFERENCE_REWARD_CONFIG, EXPERIMENT8_REWARD_CONFIG)
 }
 REWARD_PROFILE_NAMES = tuple(REWARD_CONFIGS)
 
@@ -124,6 +123,8 @@ class TrainConfig:
     max_steps_per_episode: int | None = 500
     batch_size: int = 128
     gamma: float = 0.99
+    # TD target 聚合的连续真实奖励步数；1 为传统 one-step DQN。
+    n_step: int = 1
     learning_rate: float = 1e-3
     replay_buffer_size: int = 100_000
     epsilon_start: float = 1.0

@@ -119,11 +119,7 @@ def test_cnn_feature_size_follows_grid_dimensions(
 
     grid = torch.zeros((2, 9, height, width), dtype=torch.float32)
     grid[:, 3, height // 2, width // 2] = 1.0
-    inputs = (
-        (grid, torch.zeros((2, 20), dtype=torch.float32))
-        if state_mode == "hybrid"
-        else grid
-    )
+    inputs = (grid, torch.zeros((2, 20), dtype=torch.float32)) if state_mode == "hybrid" else grid
     assert network(inputs).shape == (2, 3)
 
 
@@ -147,6 +143,57 @@ def test_cnn_agent_learns_from_numpy_replay_batch(state_mode: str) -> None:
     agent.remember(state, 1, 1.0, state, True)
 
     assert isinstance(agent.learn(), float)
+
+
+def test_agent_n_step_remember_and_finish_episode_write_aggregated_replay() -> None:
+    agent = DQNAgent(
+        state_size=2,
+        action_size=2,
+        gamma=0.5,
+        n_step=3,
+        batch_size=8,
+        seed=1,
+    )
+    agent.remember([0, 0], 0, 1.0, [1, 0], False)
+    agent.remember([1, 0], 1, 2.0, [2, 0], False)
+
+    assert len(agent.replay_buffer) == 0
+    agent.finish_episode()
+    batch = sorted(agent.replay_buffer.sample(2), key=lambda item: item.state[0])
+
+    assert [(item.reward, item.n_steps, item.done) for item in batch] == [
+        (pytest.approx(2.0), 2, False),
+        (pytest.approx(2.0), 1, False),
+    ]
+
+
+def test_n_step_td_target_uses_gamma_to_actual_horizon_and_stops_at_terminal() -> None:
+    agent = DQNAgent(state_size=2, action_size=2, gamma=0.5, n_step=3, seed=1)
+    rewards = torch.tensor([2.75, 2.0])
+    next_q = torch.tensor([4.0, 100.0])
+    dones = torch.tensor([0.0, 1.0])
+    sampled_n_steps = torch.tensor([3.0, 2.0])
+
+    target = agent._calculate_td_target(rewards, next_q, dones, sampled_n_steps)
+
+    assert torch.allclose(target, torch.tensor([3.25, 2.0]))
+
+
+def test_default_one_step_td_target_keeps_traditional_formula() -> None:
+    agent = DQNAgent(state_size=2, action_size=2, gamma=0.5, seed=1)
+    rewards = torch.tensor([1.0, 2.0])
+    next_q = torch.tensor([4.0, 100.0])
+    dones = torch.tensor([0.0, 1.0])
+
+    target = agent._calculate_td_target(
+        rewards,
+        next_q,
+        dones,
+        torch.ones(2),
+    )
+
+    assert agent.n_step == 1
+    assert torch.allclose(target, torch.tensor([3.0, 2.0]))
 
 
 def test_load_restores_non_dueling_architecture(tmp_path) -> None:
@@ -237,6 +284,26 @@ def test_save_embeds_resolved_run_config(tmp_path) -> None:
     assert checkpoint["architecture_version"] == 3
     assert "network_type" not in checkpoint
     assert "cnn_pool_size" not in checkpoint
+
+
+def test_checkpoint_restores_n_step_training_semantics(tmp_path) -> None:
+    checkpoint_path = tmp_path / "n_step.pt"
+    source_agent = DQNAgent(
+        state_size=20,
+        action_size=3,
+        gamma=0.95,
+        n_step=4,
+        seed=1,
+    )
+    source_agent.save(checkpoint_path)
+
+    loaded_agent = DQNAgent(state_size=20, action_size=3, seed=2)
+    loaded_agent.load(checkpoint_path)
+
+    assert loaded_agent.n_step == 4
+    assert loaded_agent.gamma == pytest.approx(0.95)
+    assert loaded_agent.n_step_accumulator.n_step == 4
+    assert loaded_agent.n_step_accumulator.gamma == pytest.approx(0.95)
 
 
 @pytest.mark.parametrize("architecture_version", [None, 1, 2, 4])

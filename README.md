@@ -27,6 +27,7 @@ uv run --extra cpu snake-play
 | 单局训练步数上限 | `experiment8` 不设独立上限；`reference` 默认 `500` |
 | Batch size | `128` |
 | Discount factor `gamma` | `0.99` |
+| TD target 步数 `n-step` | `1` |
 | Learning rate | `0.001` |
 | Epsilon | 从 `1.0` 线性降至 `0.01`，默认衰减 `7500` 局 |
 | 隐藏层宽度 | `256` |
@@ -112,6 +113,12 @@ AI checkpoint 会在主菜单首帧显示后于后台预加载；首次点击 AI
 
 ```bash
 uv run --extra cu124 python -m snake_ai.train
+```
+
+默认 `--n-step 1` 使用传统 one-step TD target。要聚合未来 3 步真实奖励：
+
+```bash
+uv run --extra cu124 python -m snake_ai.train --n-step 3
 ```
 
 训练默认不连接 W&B。首次使用先执行 `uv run wandb login`，再显式加入 `--wandb`：
@@ -285,6 +292,8 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 
 - `policy_net` 使用 epsilon-greedy 选择动作；评估时 `training=False`，不随机探索。
 - ReplayBuffer 满足一个 batch 后，每个环境 step 采样一批 Transition。
+- `--n-step N` 会先聚合最多 `N` 步真实折扣奖励，再以实际跨度 `k` 使用
+  `gamma**k` bootstrap；自然终止的尾部不 bootstrap，默认 `N=1`。
 - Double DQN 使用 `policy_net` 选择下一动作，再用 `target_net` 评估该动作。
 - 损失函数为 Huber loss（`SmoothL1Loss`），梯度范数裁剪到 `10.0`。
 - 每隔 `target_update_interval` 次学习更新，把 `policy_net` 参数复制到 `target_net`。

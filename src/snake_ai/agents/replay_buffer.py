@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import random
+from collections import deque
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any
 
 
@@ -20,6 +22,73 @@ class Transition:
     next_state: Any
     # 执行动作后这一局是否结束。
     done: bool
+    # 这条聚合经验实际跨越的环境步数；1 表示传统 one-step TD。
+    n_steps: int = 1
+
+
+class NStepAccumulator:
+    """把连续 one-step 交互聚合成可写入 replay 的 n-step 经验。"""
+
+    def __init__(self, n_step: int, gamma: float) -> None:
+        if n_step < 1:
+            raise ValueError("n_step must be at least 1")
+        if not 0.0 <= gamma <= 1.0:
+            raise ValueError("gamma must be between 0 and 1")
+        self.n_step = n_step
+        self.gamma = gamma
+        self.pending: deque[Transition] = deque()
+
+    def append(
+        self,
+        state: Any,
+        action: int,
+        reward: float,
+        next_state: Any,
+        done: bool,
+    ) -> tuple[Transition, ...]:
+        """加入一步交互，返回本次已经成熟的聚合经验。"""
+
+        self.pending.append(Transition(state, action, reward, next_state, done))
+        ready: list[Transition] = []
+
+        if len(self.pending) >= self.n_step:
+            ready.append(self._pop_aggregate(self.n_step))
+
+        # 自然终止后没有未来状态可 bootstrap，要把不足 n 步的尾部全部冲刷出来。
+        if done:
+            ready.extend(self.flush())
+        return tuple(ready)
+
+    def flush(self) -> tuple[Transition, ...]:
+        """冲刷 episode 尾部；截断样本保留 done=False 和实际跨度 k。"""
+
+        ready: list[Transition] = []
+        while self.pending:
+            ready.append(self._pop_aggregate(len(self.pending)))
+        return tuple(ready)
+
+    def _pop_aggregate(self, horizon: int) -> Transition:
+        window = tuple(islice(self.pending, horizon))
+        if not window:
+            raise RuntimeError("cannot aggregate an empty n-step window")
+
+        discounted_reward = sum(
+            (self.gamma**offset) * transition.reward for offset, transition in enumerate(window)
+        )
+        first = window[0]
+        last = window[-1]
+        self.pending.popleft()
+        return Transition(
+            state=first.state,
+            action=first.action,
+            reward=discounted_reward,
+            next_state=last.next_state,
+            done=last.done,
+            n_steps=horizon,
+        )
+
+    def __len__(self) -> int:
+        return len(self.pending)
 
 
 class ReplayBuffer:
@@ -42,9 +111,19 @@ class ReplayBuffer:
         reward: float,
         next_state: Any,
         done: bool,
+        n_steps: int = 1,
     ) -> None:
+        if n_steps < 1:
+            raise ValueError("n_steps must be at least 1")
         # 写满后从 position 指向的位置覆盖最旧经验，不复制 NumPy state 本身。
-        self.memory[self.position] = Transition(state, action, reward, next_state, done)
+        self.memory[self.position] = Transition(
+            state,
+            action,
+            reward,
+            next_state,
+            done,
+            n_steps,
+        )
         self.position = (self.position + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
 

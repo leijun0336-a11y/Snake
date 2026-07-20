@@ -34,8 +34,9 @@ from snake_ai.wandb_logging import WandbRun, start_wandb, training_metrics
 try:
     from torch.utils.tensorboard import SummaryWriter
 # 如果用户没装 TensorBoard，就让它等于 None
-except ImportError:  
+except ImportError:
     SummaryWriter = None
+
 
 # 解析启动脚本时的命令行参数
 def parse_args() -> argparse.Namespace:
@@ -70,6 +71,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--batch-size", type=int, default=TrainConfig.batch_size)
     parser.add_argument("--gamma", type=float, default=TrainConfig.gamma)
+    parser.add_argument(
+        "--n-step",
+        type=int,
+        default=TrainConfig.n_step,
+        help="number of real rewards in each TD target (default: 1)",
+    )
     parser.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate)
     parser.add_argument("--replay-buffer-size", type=int, default=TrainConfig.replay_buffer_size)
     parser.add_argument("--epsilon-start", type=float, default=TrainConfig.epsilon_start)
@@ -77,10 +84,19 @@ def parse_args() -> argparse.Namespace:
     # 是否采用指数衰减；默认关闭，即采用线性衰减。
     parser.add_argument("--epsilon-exp-decay", action="store_true")
     # 指数衰减系数；仅在启用 --epsilon-exp-decay 时生效。
-    parser.add_argument("--epsilon-exp-factor", type=float, default=TrainConfig.epsilon_exp_factor, metavar="FACTOR")
+    parser.add_argument(
+        "--epsilon-exp-factor", type=float, default=TrainConfig.epsilon_exp_factor, metavar="FACTOR"
+    )
     # epsilon 线性降至下限所用局数；默认取最大训练局数的一半。
-    parser.add_argument("--epsilon-linear-episodes", type=int, default=TrainConfig.epsilon_linear_episodes, metavar="N")
-    parser.add_argument("--target-update-interval",type=int,default=TrainConfig.target_update_interval)
+    parser.add_argument(
+        "--epsilon-linear-episodes",
+        type=int,
+        default=TrainConfig.epsilon_linear_episodes,
+        metavar="N",
+    )
+    parser.add_argument(
+        "--target-update-interval", type=int, default=TrainConfig.target_update_interval
+    )
     parser.add_argument("--hidden-size", type=int, default=TrainConfig.hidden_size)
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     # 这些参数只影响 Grid/Hybrid 的卷积主干，Vector baseline 会忽略它们。
@@ -88,7 +104,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels)
     parser.add_argument("--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations)
     # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
-    parser.add_argument("--early-stop",action="store_true")
+    parser.add_argument("--early-stop", action="store_true")
     # 至少训练多少局后，才允许基于阶段验证的早停判断生效。
     parser.add_argument("--min-episodes", type=int, default=5000)
     parser.add_argument("--validation-interval", type=int, default=500)
@@ -111,9 +127,10 @@ def resolve_max_steps_per_episode(args: argparse.Namespace) -> int | None:
         return None
     return TrainConfig.max_steps_per_episode
 
+
 # 校验训练参数、解析派生默认值，并构造最终配置。
 def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
-    
+
     max_episodes = args.max_episodes
     if max_episodes < 1:
         raise ValueError("max episodes must be at least 1")
@@ -126,6 +143,8 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("replay_buffer_size must be at least batch_size >= 1")
     if not 0.0 <= args.gamma <= 1.0:
         raise ValueError("gamma must be between 0 and 1")
+    if args.n_step < 1:
+        raise ValueError("n_step must be at least 1")
     if args.learning_rate <= 0.0:
         raise ValueError("learning_rate must be positive")
     if not 0.0 <= args.epsilon_end <= args.epsilon_start <= 1.0:
@@ -163,6 +182,7 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         max_steps_per_episode=max_steps_per_episode,
         batch_size=args.batch_size,
         gamma=args.gamma,
+        n_step=args.n_step,
         learning_rate=args.learning_rate,
         replay_buffer_size=args.replay_buffer_size,
         epsilon_start=args.epsilon_start,
@@ -214,8 +234,7 @@ def print_stop_overview(
         print("actual stop condition           : run until max episodes")
     else:
         print(
-            "early stop eligibility         : "
-            f"epsilon at floor and episode >= {args.min_episodes}"
+            f"early stop eligibility         : epsilon at floor and episode >= {args.min_episodes}"
         )
         if args.target_mean_score is None:
             print("target mean score stop          : disabled")
@@ -309,7 +328,7 @@ def main() -> None:
 
     # 在指定的文件夹（这里是刚才创建的 run_dir）里新建训练日志文件；.train 后缀方便和评估日志区分。
     writer = SummaryWriter(run_dir, filename_suffix=".train") if SummaryWriter is not None else None
-    
+
     # 训练指标和阶段验证指标分开保存。
     csv_path = run_dir / "train_metrics.csv"
     validation_csv_path = run_dir / "validation_metrics.csv"
@@ -318,11 +337,11 @@ def main() -> None:
         width=env_config.width,
         height=env_config.height,
         # 是否渲染
-        render_mode=args.render,  
+        render_mode=args.render,
         # 每个格子渲染成多少像素
-        cell_size=env_config.cell_size,  
+        cell_size=env_config.cell_size,
         # 渲染帧率，画面刷新速度
-        fps=env_config.fps,  
+        fps=env_config.fps,
         seed=train_config.seed,
         # 环境直接在 reset()/step() 中返回对应 observation，避免训练循环重复构造状态。
         state_mode=args.state_mode,
@@ -334,23 +353,22 @@ def main() -> None:
     agent = DQNAgent(
         # 状态维度
         state_size=(
-            env.grid_state_shape
-            if args.state_mode in ("grid", "hybrid")
-            else env.state_size
+            env.grid_state_shape if args.state_mode in ("grid", "hybrid") else env.state_size
         ),
         # 动作维度
-        action_size=env.action_size, 
+        action_size=env.action_size,
         hidden_size=train_config.hidden_size,
         learning_rate=train_config.learning_rate,
         # 折扣率
-        gamma=train_config.gamma,  
+        gamma=train_config.gamma,
+        n_step=train_config.n_step,
         # 经验池大小
-        replay_buffer_size=train_config.replay_buffer_size,  
+        replay_buffer_size=train_config.replay_buffer_size,
         batch_size=train_config.batch_size,
         # 初始epsilon值(Epsilon-Greedy)
-        epsilon_start=train_config.epsilon_start,  
+        epsilon_start=train_config.epsilon_start,
         # epsilon值的下界
-        epsilon_end=train_config.epsilon_end,  
+        epsilon_end=train_config.epsilon_end,
         # 是否采用指数衰减；默认采用线性衰减。
         epsilon_exp_decay=train_config.epsilon_exp_decay,
         # epsilon 的指数衰减系数；仅在指数衰减模式下使用。
@@ -359,7 +377,7 @@ def main() -> None:
         epsilon_linear_episodes=train_config.epsilon_linear_episodes,
         # 隔多少步更新一次目标网络
         # Q训练网络更新一次视为一步，当经验池满后，则等价于贪吃蛇走一步
-        target_update_interval=train_config.target_update_interval,   
+        target_update_interval=train_config.target_update_interval,
         state_mode=args.state_mode,
         # Hybrid 拼接的是完整 get_state()，因此辅助向量维度等于环境 state_size。
         auxiliary_size=env.state_size,
@@ -627,7 +645,7 @@ def main() -> None:
             for episode in range(1, train_config.episodes + 1):
                 state = env.reset()
                 done = False
-                
+
                 # 记录一个episode中所有步的loss
                 losses: list[float] = []
                 # 记录一个 episode 中所有 step 的 reward 总和，和 score 分开观察。
@@ -641,12 +659,9 @@ def main() -> None:
                 }
 
                 # 一次episode训练
-                while (
-                    not done
-                    and (
-                        train_config.max_steps_per_episode is None
-                        or env.frame_iteration < train_config.max_steps_per_episode
-                    )
+                while not done and (
+                    train_config.max_steps_per_episode is None
+                    or env.frame_iteration < train_config.max_steps_per_episode
                 ):
                     # 训练时的动作采样
                     action = agent.act(state, training=True)
@@ -663,6 +678,10 @@ def main() -> None:
                     if loss is not None:
                         losses.append(loss)
                     state = next_state
+
+                # 自然终止时队列通常已在 remember() 中冲刷；若这里只是达到最大步数，
+                # 则按实际跨度 k 保存尾部，并允许从最后的非终止状态 bootstrap。
+                agent.finish_episode()
 
                 # 每个 episode 执行一次 epsilon 衰减；默认按最大训练局数的 50% 线性退火。
                 agent.decay_epsilon(episode)
@@ -716,9 +735,7 @@ def main() -> None:
                     # 最近100局滑动平均累计环境奖励
                     writer.add_scalar("train/mean_reward_100", mean_reward, episode)
                     for component, component_value in reward_components.items():
-                        writer.add_scalar(
-                            f"train/reward_{component}", component_value, episode
-                        )
+                        writer.add_scalar(f"train/reward_{component}", component_value, episode)
                     # 本局存活步数
                     writer.add_scalar("train/episode_steps", episode_steps, episode)
                     # 当前探索率
@@ -767,7 +784,7 @@ def main() -> None:
                         len(agent.replay_buffer),
                     ]
                 )
-                
+
                 # 强制将内存缓冲区（Buffer）中的数据立刻写入到实际的硬盘文件中，防止数据丢失
                 file.flush()
 

@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import nn, optim
 
-from snake_ai.agents.replay_buffer import ReplayBuffer
+from snake_ai.agents.replay_buffer import NStepAccumulator, ReplayBuffer, Transition
 from snake_ai.models.q_network import QNetwork
 
 
@@ -28,6 +28,8 @@ class DQNAgent:
         learning_rate: float = 1e-3,
         # 折扣因子，越接近 1 越重视未来奖励。
         gamma: float = 0.99,
+        # TD target 使用的真实奖励步数；1 保持传统 one-step DQN。
+        n_step: int = 1,
         # 经验回放池容量，最多保存多少条 Transition。
         replay_buffer_size: int = 100_000,
         # 每次训练从经验池随机采样多少条经验。
@@ -72,6 +74,9 @@ class DQNAgent:
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
+        if n_step < 1:
+            raise ValueError("n_step must be at least 1")
+        self.n_step = n_step
         self.epsilon_start = epsilon_start
         self.epsilon = epsilon_start
         self.epsilon_end = epsilon_end
@@ -83,7 +88,7 @@ class DQNAgent:
         self.learn_steps = 0
         self.random = random.Random(seed)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        
+
         # 生成随机数种子
         torch.manual_seed(seed)
         self.policy_net = self._build_network()
@@ -97,11 +102,12 @@ class DQNAgent:
         # DQN 常用 Huber loss；相比 MSE，它会降低大 TD error 对梯度的冲击。
         self.loss_fn = nn.SmoothL1Loss()
         self.replay_buffer = ReplayBuffer(replay_buffer_size, seed=seed)
+        self.n_step_accumulator = NStepAccumulator(n_step, gamma)
 
     # 动作采样，DQN采用epsilon-greedy
     def act(self, state: Any, training: bool = True) -> int:
         # state: 输入的状态；training:是否训练，评估模式不探索。
-        
+
         # 如果正在训练且落入epsilon概率内
         if training and self.random.random() < self.epsilon:
             return self.random.randrange(self.action_size)
@@ -127,7 +133,24 @@ class DQNAgent:
         # 执行动作后这一局是否结束。
         done: bool,
     ) -> None:
-        self.replay_buffer.push(state, action, reward, next_state, done)
+        ready = self.n_step_accumulator.append(state, action, reward, next_state, done)
+        self._push_aggregated_transitions(ready)
+
+    def finish_episode(self) -> None:
+        """在自然终止或步数截断后冲刷不足 n 步的 episode 尾部。"""
+
+        self._push_aggregated_transitions(self.n_step_accumulator.flush())
+
+    def _push_aggregated_transitions(self, transitions: tuple[Transition, ...]) -> None:
+        for transition in transitions:
+            self.replay_buffer.push(
+                transition.state,
+                transition.action,
+                transition.reward,
+                transition.next_state,
+                transition.done,
+                transition.n_steps,
+            )
 
     # 更新动作函数
     def learn(self) -> float | None:  # 返回值是float或者None
@@ -140,28 +163,34 @@ class DQNAgent:
 
         # 提取batch中的信息
         states = self._state_batch_to_tensor([item.state for item in batch])
-        actions = torch.tensor([item.action for item in batch], dtype=torch.long, device=self.device)
-        rewards = torch.tensor([item.reward for item in batch], dtype=torch.float32, device=self.device)
+        actions = torch.tensor(
+            [item.action for item in batch], dtype=torch.long, device=self.device
+        )
+        rewards = torch.tensor(
+            [item.reward for item in batch], dtype=torch.float32, device=self.device
+        )
         next_states = self._state_batch_to_tensor([item.next_state for item in batch])
         dones = torch.tensor([item.done for item in batch], dtype=torch.float32, device=self.device)
+        sampled_n_steps = torch.tensor(
+            [item.n_steps for item in batch], dtype=torch.float32, device=self.device
+        )
 
         # policy_net(states): 每个状态下，所有动作的 Q 值[batch_size, action_dim(可选动作数)]
         # actions.unsqueeze(1): 把实际执行过的动作编号变成 gather 需要的形状[batch_size, 1]
         # gather(1, ...): 取出每条经验中实际执行动作的 Q 值
         # squeeze(1): 把结果从 [batch_size, 1] 变成 [batch_size]
         current_q = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
-        
+
         # 基于时序差分学习和贝尔曼最优方程
         # 将当前 $Q$ 值拆解为当前奖励与未来最大 $Q$ 值的组合，并利用时序差分学习（TD）通过时序差分（TD Error）来逐步修正和逼近这个最优目标
         # 计算td_target作为标签，计算标签的过程不加入计算图
         with torch.no_grad():
-            
             next_actions = self.policy_net(next_states).argmax(dim=1)
             # Double DQN: 把 next_states 传给 target_net 来计算 Q(s', a')，而不是直接用 policy_net 的最大 Q 值
             # Y_t = R_{t+1} + gamma * Q_target(s_{t+1}, argmax_a Q_net(s_{t+1}, a))
             next_q = self.target_net(next_states).gather(1, next_actions.unsqueeze(1)).squeeze(1)
             # [batch_size, 1]，如果 done 为 True，则不考虑未来奖励
-            target_q = rewards + self.gamma * next_q * (1.0 - dones)
+            target_q = self._calculate_td_target(rewards, next_q, dones, sampled_n_steps)
 
         # Huber loss 用于降低离群 TD error 对训练稳定性的影响。
         loss = self.loss_fn(current_q, target_q)
@@ -176,13 +205,29 @@ class DQNAgent:
 
         # 在经验池完全充足的情况下，蛇每走一格就learn_steps+1
         self.learn_steps += 1
-        
+
         # 每隔一段时间更新目标网络
         if self.learn_steps % self.target_update_interval == 0:
             self.update_target_network()
 
         # 返回浮点数类型的loss
         return float(loss.item())
+
+    def _calculate_td_target(
+        self,
+        rewards: torch.Tensor,
+        next_q: torch.Tensor,
+        dones: torch.Tensor,
+        sampled_n_steps: torch.Tensor,
+    ) -> torch.Tensor:
+        """计算 one-step 或 n-step Double DQN 监督目标。"""
+
+        if self.n_step == 1:
+            # 保留历史 one-step 的同一运算表达式，默认参数不改变原训练数值路径。
+            return rewards + self.gamma * next_q * (1.0 - dones)
+        gamma_tensor = torch.full_like(rewards, self.gamma)
+        bootstrap_discounts = torch.pow(gamma_tensor, sampled_n_steps)
+        return rewards + bootstrap_discounts * next_q * (1.0 - dones)
 
     # 逐渐减少随机探索，让智能体从“多尝试”过渡到“多利用已学到的策略”
     def decay_epsilon(self, episode: int | None = None) -> None:
@@ -193,9 +238,7 @@ class DQNAgent:
             raise ValueError("episode is required when using linear epsilon decay")
         progress = min(max(episode, 0) / self.epsilon_linear_episodes, 1.0)
         epsilon_range = self.epsilon_start - self.epsilon_end
-        self.epsilon = max(
-            self.epsilon_end, self.epsilon_start - epsilon_range * progress
-        )
+        self.epsilon = max(self.epsilon_end, self.epsilon_start - epsilon_range * progress)
 
     # 更新目标网络
     def update_target_network(self) -> None:
@@ -221,9 +264,7 @@ class DQNAgent:
         if self.state_mode == "hybrid":
             # Hybrid replay 中每条 state 都是 (grid, 20维人工状态)，分别组成两个 batch。
             grids = self._grid_batch_to_tensor([state[0] for state in states])
-            auxiliary_array = np.asarray(
-                [state[1] for state in states], dtype=np.float32
-            )
+            auxiliary_array = np.asarray([state[1] for state in states], dtype=np.float32)
             auxiliary_states = self._numpy_to_tensor(auxiliary_array)
             return grids, auxiliary_states
         if self.state_mode == "grid":
@@ -272,6 +313,9 @@ class DQNAgent:
             "epsilon_linear_episodes": self.epsilon_linear_episodes,
             # 已完成的神经网络更新次数，用于恢复目标网络同步节奏。
             "learn_steps": self.learn_steps,
+            # n-step 只改变训练目标，不改变网络结构；旧 checkpoint 缺失时按 1 处理。
+            "n_step": self.n_step,
+            "gamma": self.gamma,
             # 状态向量维度，方便加载时检查环境和模型是否匹配。
             "state_size": self.state_size,
             "state_mode": self.state_mode,
@@ -356,9 +400,7 @@ class DQNAgent:
         checkpoint_auxiliary_size = int(checkpoint["auxiliary_size"])
         checkpoint_cnn_channels = int(checkpoint["cnn_channels"])
         checkpoint_cnn_output_channels = int(checkpoint["cnn_output_channels"])
-        checkpoint_cnn_dilations = tuple(
-            int(value) for value in checkpoint["cnn_dilations"]
-        )
+        checkpoint_cnn_dilations = tuple(int(value) for value in checkpoint["cnn_dilations"])
         if checkpoint_state_mode == "hybrid" and checkpoint_auxiliary_size != self.auxiliary_size:
             raise ValueError(
                 f"Checkpoint auxiliary_size={checkpoint_auxiliary_size} does not match "
@@ -393,3 +435,6 @@ class DQNAgent:
         self.epsilon_exp_factor = float(checkpoint["epsilon_exp_factor"])
         self.epsilon_linear_episodes = int(checkpoint["epsilon_linear_episodes"])
         self.learn_steps = int(checkpoint["learn_steps"])
+        self.n_step = int(checkpoint.get("n_step", 1))
+        self.gamma = float(checkpoint.get("gamma", self.gamma))
+        self.n_step_accumulator = NStepAccumulator(self.n_step, self.gamma)
