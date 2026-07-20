@@ -31,7 +31,7 @@ pad -> unfold 全部 H×W 个 5×5 窗口 -> gather 蛇头窗口
 - 全局和局部特征的拼接顺序、融合层输入维度及最终 Q 值计算完全不变。
 - 网络参数名称、参数值和 `state_dict` 键保持不变，已有 checkpoint 能继续加载。
 
-不要求保留仅用于组织代码、但不参与计算的 `global_pool: nn.Identity` 模块节点。当前运行时代码没有依赖该节点执行额外逻辑，但 `tests/test_dqn_agent.py` 会直接断言它是 `nn.Identity`，实现时必须同步把该测试改为验证“没有自适应池化且全局特征维度仍为 `C×H×W`”。若项目外部代码曾访问 `model.global_pool` 或在其上注册 hook，也需要改为访问 `global_projection`。这些变化只涉及模块树、测试和调试入口，不影响网络计算；旧网络 `q_network_old.py` 的真实池化层及相关测试必须保持不变。
+不要求保留仅用于组织代码、但不参与计算的 `global_pool: nn.Identity` 模块节点。当前运行时代码没有依赖该节点执行额外逻辑，但 `tests/test_dqn_agent.py` 会直接断言它是 `nn.Identity`，实现时必须同步把该测试改为验证“没有自适应池化且全局特征维度仍为 `C×H×W`”。若项目外部代码曾访问 `model.global_pool` 或在其上注册 hook，也需要改为访问 `global_projection`。这些变化只涉及模块树、测试和调试入口，不影响网络计算。
 
 ## 拟采用实现
 
@@ -95,18 +95,15 @@ local_offsets 是固定的 25 个相对位置，使用 persistent=False 的 buff
 - 不使用逐样本 Python 循环切片：会产生大量小计算图节点和 GPU kernel 调度。
 - 不使用 grid_sample：CUDA backward 在严格 deterministic 模式下没有确定性实现。
 - 不把 `nn.Identity` 替换为任何真实的池化层：池化会改变全局特征及融合层输入，属于架构变更。
-- 暂不把局部 patch 前移到环境 observation：这会从“学习后的特征裁剪”变成“原始输入裁剪”，属于架构变更并会影响旧 checkpoint。
-- 不修改 q_network_old.py；它是隔离的旧网络实现。
+- 暂不把局部 patch 前移到环境 observation：这会从“学习后的特征裁剪”变成“原始输入裁剪”，属于架构变更并会影响现有 architecture v3 checkpoint。
 
 ## 代码与测试
 
 计划修改：
 
 1. src/snake_ai/models/q_network.py：删除 `global_pool = nn.Identity()` 及对应调用，并用直接索引替换 `F.unfold`。
-2. tests/test_dqn_agent.py：删除对新网络 `global_pool` 属性的 `nn.Identity` 断言，继续验证完整 H×W 特征维度和不存在 `AdaptiveAvgPool2d`；保留旧网络的池化断言。
+2. tests/test_dqn_agent.py：删除对 `global_pool` 属性的 `nn.Identity` 断言，继续验证完整 H×W 特征维度和不存在 `AdaptiveAvgPool2d`。
 3. tests/test_q_network.py：新增全局分支、局部裁剪和 checkpoint 兼容性测试。
-4. scripts/benchmark_feature_crop.py：新增 AutoDL GPU microbenchmark。
-
 测试范围：
 
 - 6×6 棋盘全部 36 个蛇头位置，包括四角和边缘。

@@ -13,15 +13,11 @@
 - 保留共享CNN、独立全局/局部投影、蛇头中心5×5局部分支和Dueling Q头。
 - 删除 `cnn_pool_size` 配置、`--cnn-pool-size` 命令行参数及相关参数传递。
 - checkpoint架构版本升级为3，不再保存池化目标尺寸。
-- 默认网络可以兼容加载版本2的10×10 checkpoint；版本2的6×6和20×20
-  checkpoint需要显式选择 `q_network_old`。
-- 新增 `models/q_network_old.py`，完整保留版本2池化结构，仅用于历史权重评估；
-  `DQNAgent.learn()` 和 `save()` 会拒绝旧网络。
-- `evaluate.py` 新增 `--network {q_network,q_network_old}`，默认使用 `q_network`。
+- checkpoint 加载器只接受架构版本3，并严格要求当前版本的完整元数据；历史架构
+  需要使用匹配的 Git 版本，不在当前运行时代码中保留兼容实现。
 - `--deterministic` 现在使用严格确定性算法；遇到无确定性实现的算子会直接报错，
   关闭该参数时会显式恢复非确定性算法模式。
-- README和实验8启动脚本已同步更新；实验8脚本现在表示在动态网格架构上复用其
-  奖励和训练参数，不再声称复现旧版自适应池化架构。
+- README 已同步更新，只说明当前动态网格架构和严格 checkpoint 版本策略。
 
 ## 动态维度示例
 
@@ -40,11 +36,7 @@
 - Ruff静态检查：通过。
 - Python字节码编译：通过。
 - 新增覆盖：6×6、10×10、20×20、矩形网格，Grid/Hybrid前向形状，
-  Identity与动态融合维度，新网络无AdaptivePool，版本2 checkpoint的新旧网络选择，
-  严格确定性开关。
-- 已使用第八次实验真实 `latest.pt` 完成 `q_network_old` 无渲染短评估。
+  动态融合维度、新网络无AdaptivePool、非当前 checkpoint 版本拒绝和严格确定性开关。
+- 已使用真实架构版本3 checkpoint 完成加载和无探索动作推理。
 
 本次没有启动正式训练。
-
-旧网络兼容层的完整接入点、依赖边界和后续移除步骤见
-[`old_q_network_isolation_report.md`](old_q_network_isolation_report.md)。

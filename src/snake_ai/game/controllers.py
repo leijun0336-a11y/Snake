@@ -110,9 +110,6 @@ class DQNController:
                 f"AI profile reward {profile.reward_profile!r} does not match checkpoint "
                 f"{reward.get('profile')!r}"
             )
-        if checkpoint.get("network_type", "q_network") != profile.network_type:
-            raise ValueError("AI profile network_type does not match checkpoint metadata")
-
         state_size: int | tuple[int, int, int]
         if profile.state_mode in ("grid", "hybrid"):
             state_size = (SnakeEnv.grid_channels, profile.height, profile.width)
@@ -125,7 +122,6 @@ class DQNController:
             epsilon_start=0.0,
             epsilon_end=0.0,
             state_mode=profile.state_mode,
-            network_type=profile.network_type,
             auxiliary_size=SnakeEnv.state_size,
         )
         # load() performs strict state, mode, version and architecture checks.

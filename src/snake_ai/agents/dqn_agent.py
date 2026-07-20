@@ -11,12 +11,10 @@ from torch import nn, optim
 
 from snake_ai.agents.replay_buffer import ReplayBuffer
 from snake_ai.models.q_network import QNetwork
-from snake_ai.models.q_network_old import QNetworkOld
 
 
 class DQNAgent:
     ARCHITECTURE_VERSION = 3
-    NETWORK_TYPES = ("q_network", "q_network_old")
 
     def __init__(
         self,
@@ -50,8 +48,6 @@ class DQNAgent:
         dueling: bool = True,
         # 状态输入模式：vector 使用人工低维状态，grid 使用多通道网格状态。
         state_mode: str = "vector",
-        # 网络实现；q_network_old 仅用于评估版本2历史checkpoint。
-        network_type: str = "q_network",
         # Hybrid 模式下与 CNN 特征拼接的人工状态维度。
         auxiliary_size: int = 20,
         # Grid/Hybrid CNN 主干通道数。
@@ -65,19 +61,14 @@ class DQNAgent:
         # 计算设备；不传时优先使用 cuda，否则使用 cpu。
         device: str | None = None,
     ) -> None:
-        if network_type not in self.NETWORK_TYPES:
-            choices = ", ".join(self.NETWORK_TYPES)
-            raise ValueError(f"network_type must be one of: {choices}")
         self.state_size = state_size
         self.action_size = action_size
         self.hidden_size = hidden_size
         self.state_mode = state_mode
-        self.network_type = network_type
         self.auxiliary_size = auxiliary_size
         self.cnn_channels = cnn_channels
         self.cnn_output_channels = cnn_output_channels
         self.cnn_dilations = tuple(cnn_dilations)
-        self.old_cnn_pool_size = (10, 10)
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
@@ -140,9 +131,6 @@ class DQNAgent:
 
     # 更新动作函数
     def learn(self) -> float | None:  # 返回值是float或者None
-        if self.network_type == "q_network_old":
-            raise RuntimeError("q_network_old is evaluation-only and cannot be trained")
-        
         # 如果经验回放池的样本数量还不足一个batch_size，不进行更新
         if len(self.replay_buffer) < self.batch_size:
             return None
@@ -213,24 +201,18 @@ class DQNAgent:
     def update_target_network(self) -> None:
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
-    def _build_network(self) -> QNetwork | QNetworkOld:
+    def _build_network(self) -> QNetwork:
         # Policy/Target 网络都通过此方法构建，确保它们使用完全相同的状态模式和 CNN 配置。
-        network_class = QNetworkOld if self.network_type == "q_network_old" else QNetwork
-        network_kwargs: dict[str, Any] = {
-            "dueling": self.dueling,
-            "state_mode": self.state_mode,
-            "auxiliary_size": self.auxiliary_size,
-            "cnn_channels": self.cnn_channels,
-            "cnn_output_channels": self.cnn_output_channels,
-            "cnn_dilations": self.cnn_dilations,
-        }
-        if self.network_type == "q_network_old":
-            network_kwargs["cnn_pool_size"] = self.old_cnn_pool_size
-        return network_class(
+        return QNetwork(
             self.state_size,
             self.hidden_size,
             self.action_size,
-            **network_kwargs,
+            dueling=self.dueling,
+            state_mode=self.state_mode,
+            auxiliary_size=self.auxiliary_size,
+            cnn_channels=self.cnn_channels,
+            cnn_output_channels=self.cnn_output_channels,
+            cnn_dilations=self.cnn_dilations,
         ).to(self.device)
 
     def _state_batch_to_tensor(
@@ -272,8 +254,6 @@ class DQNAgent:
         path: str | Path,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        if self.network_type == "q_network_old":
-            raise RuntimeError("q_network_old is evaluation-only and cannot save checkpoints")
         path = Path(path)
         # 创建保存模型文件所在的文件夹
         # 如果父目录不存在，连带创建父母，如果当前目录已经存在也不要报错
@@ -304,7 +284,6 @@ class DQNAgent:
             "hidden_size": self.hidden_size,
             "action_size": self.action_size,
             "dueling": self.dueling,
-            "network_type": self.network_type,
             "architecture_version": self.ARCHITECTURE_VERSION,
         }
         if metadata is not None:
@@ -315,15 +294,47 @@ class DQNAgent:
     def load(self, path: str | Path) -> None:
         # 把断点中的数据加载到当前设备上
         checkpoint = torch.load(path, map_location=self.device)
+        checkpoint_version = checkpoint.get("architecture_version")
+        if checkpoint_version != self.ARCHITECTURE_VERSION:
+            raise ValueError(
+                f"Unsupported checkpoint architecture_version={checkpoint_version!r}; "
+                f"current code requires architecture_version={self.ARCHITECTURE_VERSION}. "
+                "Use the matching historical Git revision for older checkpoints."
+            )
+
+        required_fields = {
+            "policy_net",
+            "target_net",
+            "epsilon_start",
+            "epsilon",
+            "epsilon_end",
+            "epsilon_exp_decay",
+            "epsilon_exp_factor",
+            "epsilon_linear_episodes",
+            "learn_steps",
+            "state_size",
+            "state_mode",
+            "auxiliary_size",
+            "cnn_channels",
+            "cnn_output_channels",
+            "cnn_dilations",
+            "hidden_size",
+            "action_size",
+            "dueling",
+        }
+        missing_fields = required_fields.difference(checkpoint)
+        if missing_fields:
+            missing_text = ", ".join(sorted(missing_fields))
+            raise ValueError(
+                f"Architecture v{self.ARCHITECTURE_VERSION} checkpoint is missing "
+                f"required fields: {missing_text}."
+            )
+
         policy_state = checkpoint["policy_net"]
-        checkpoint_dueling = bool(
-            checkpoint.get("dueling", not any(key.startswith("net.") for key in policy_state))
-        )
-        checkpoint_hidden_size = int(checkpoint.get("hidden_size", self.hidden_size))
-        checkpoint_state_size = checkpoint.get("state_size", self.state_size)
-        if isinstance(checkpoint_state_size, list):
-            checkpoint_state_size = tuple(checkpoint_state_size)
-        checkpoint_state_mode = str(checkpoint.get("state_mode", "vector"))
+        checkpoint_dueling = bool(checkpoint["dueling"])
+        checkpoint_hidden_size = int(checkpoint["hidden_size"])
+        checkpoint_state_size = checkpoint["state_size"]
+        checkpoint_state_mode = str(checkpoint["state_mode"])
         if checkpoint_state_size != self.state_size:
             raise ValueError(
                 f"Checkpoint state_size={checkpoint_state_size} does not match "
@@ -336,71 +347,18 @@ class DQNAgent:
                 f"current agent state_mode={self.state_mode!r}."
             )
 
-        checkpoint_architecture_version = int(checkpoint.get("architecture_version", 1))
-        if self.network_type == "q_network_old" and checkpoint_architecture_version != 2:
-            raise ValueError("q_network_old only supports architecture_version=2 checkpoints")
-        if checkpoint_state_mode in ("grid", "hybrid") and checkpoint_architecture_version not in (2, 3):
+        checkpoint_action_size = int(checkpoint["action_size"])
+        if checkpoint_action_size != self.action_size:
             raise ValueError(
-                "This Grid/Hybrid checkpoint predates the nine-channel dual-branch "
-                "architecture and cannot be loaded. Retrain with the current version."
+                f"Checkpoint action_size={checkpoint_action_size} does not match "
+                f"current agent action_size={self.action_size}."
             )
-        # 旧 Grid 权重曾拼接 4 维方向向量，与当前纯 CNN Grid 的全连接层形状不同。
-        if checkpoint_state_mode == "grid" and "direction_size" in checkpoint:
-            raise ValueError(
-                "This checkpoint uses the former grid + direction architecture. "
-                "The current grid mode is CNN-only; retrain it or use a matching older revision."
-            )
-        checkpoint_auxiliary_size = self.auxiliary_size
-        checkpoint_cnn_channels = self.cnn_channels
-        checkpoint_cnn_output_channels = self.cnn_output_channels
-        checkpoint_cnn_dilations = self.cnn_dilations
-        checkpoint_pool_size = self.old_cnn_pool_size
-        if checkpoint_state_mode in ("grid", "hybrid"):
-            # Grid/Hybrid 禁止缺失字段时退回默认架构，避免静默加载错误的网络结构。
-            required_cnn_fields = {
-                "cnn_channels",
-                "cnn_output_channels",
-                "cnn_dilations",
-            }
-            if checkpoint_architecture_version == 2:
-                required_cnn_fields.add("cnn_pool_size")
-            if checkpoint_state_mode == "hybrid":
-                required_cnn_fields.add("auxiliary_size")
-            missing_fields = required_cnn_fields.difference(checkpoint)
-            if missing_fields:
-                missing_text = ", ".join(sorted(missing_fields))
-                raise ValueError(
-                    f"Checkpoint is missing CNN architecture fields: {missing_text}."
-                )
-
-            checkpoint_auxiliary_size = int(
-                checkpoint.get("auxiliary_size", self.auxiliary_size)
-            )
-            checkpoint_cnn_channels = int(checkpoint["cnn_channels"])
-            checkpoint_cnn_output_channels = int(checkpoint["cnn_output_channels"])
-            checkpoint_cnn_dilations = tuple(
-                int(value) for value in checkpoint["cnn_dilations"]
-            )
-            if checkpoint_architecture_version == 2:
-                if not isinstance(checkpoint_state_size, tuple) or len(checkpoint_state_size) != 3:
-                    raise ValueError("Version 2 Grid/Hybrid checkpoint has invalid state_size metadata.")
-                checkpoint_pool_size = tuple(
-                    int(value) for value in checkpoint["cnn_pool_size"]
-                )
-                checkpoint_grid_size = (
-                    int(checkpoint_state_size[1]),
-                    int(checkpoint_state_size[2]),
-                )
-                if (
-                    self.network_type == "q_network"
-                    and checkpoint_pool_size != checkpoint_grid_size
-                ):
-                    raise ValueError(
-                        "This version 2 Grid/Hybrid checkpoint used a fixed pooled size "
-                        f"of {checkpoint_pool_size} for grid size {checkpoint_grid_size}; "
-                        "its fully connected input is incompatible with the dynamic-grid "
-                        "architecture. Retrain this grid size."
-                    )
+        checkpoint_auxiliary_size = int(checkpoint["auxiliary_size"])
+        checkpoint_cnn_channels = int(checkpoint["cnn_channels"])
+        checkpoint_cnn_output_channels = int(checkpoint["cnn_output_channels"])
+        checkpoint_cnn_dilations = tuple(
+            int(value) for value in checkpoint["cnn_dilations"]
+        )
         if checkpoint_state_mode == "hybrid" and checkpoint_auxiliary_size != self.auxiliary_size:
             raise ValueError(
                 f"Checkpoint auxiliary_size={checkpoint_auxiliary_size} does not match "
@@ -412,10 +370,6 @@ class DQNAgent:
             or checkpoint_cnn_channels != self.cnn_channels
             or checkpoint_cnn_output_channels != self.cnn_output_channels
             or checkpoint_cnn_dilations != self.cnn_dilations
-            or (
-                self.network_type == "q_network_old"
-                and checkpoint_pool_size != self.old_cnn_pool_size
-            )
         )
         # 按 checkpoint 中记录的完整架构参数重建网络，再加载对应权重。
         if architecture_changed:
@@ -424,7 +378,6 @@ class DQNAgent:
             self.cnn_channels = checkpoint_cnn_channels
             self.cnn_output_channels = checkpoint_cnn_output_channels
             self.cnn_dilations = checkpoint_cnn_dilations
-            self.old_cnn_pool_size = checkpoint_pool_size
             self.policy_net = self._build_network()
             self.target_net = self._build_network()
             self.target_net.eval()
@@ -432,24 +385,11 @@ class DQNAgent:
 
         # 正常加载权重到网络。
         self.policy_net.load_state_dict(policy_state)
-        self.target_net.load_state_dict(checkpoint.get("target_net", policy_state))
-        self.epsilon_start = float(checkpoint.get("epsilon_start", self.epsilon_start))
-        self.epsilon = float(checkpoint.get("epsilon", self.epsilon_end))
-        self.epsilon_end = float(checkpoint.get("epsilon_end", self.epsilon_end))
-        self.epsilon_exp_factor = float(
-            checkpoint.get(
-                "epsilon_exp_factor",
-                checkpoint.get("epsilon_decay", self.epsilon_exp_factor),
-            )
-        )
-        if "epsilon_exp_decay" in checkpoint:
-            self.epsilon_exp_decay = bool(checkpoint["epsilon_exp_decay"])
-        elif "epsilon_decay_episodes" in checkpoint:
-            # 旧 checkpoint 用线性周期是否为 None 隐式表示衰减策略。
-            self.epsilon_exp_decay = checkpoint["epsilon_decay_episodes"] is None
-        checkpoint_linear_episodes = checkpoint.get("epsilon_linear_episodes")
-        if checkpoint_linear_episodes is None:
-            checkpoint_linear_episodes = checkpoint.get("epsilon_decay_episodes")
-        if checkpoint_linear_episodes is not None:
-            self.epsilon_linear_episodes = int(checkpoint_linear_episodes)
-        self.learn_steps = int(checkpoint.get("learn_steps", 0))
+        self.target_net.load_state_dict(checkpoint["target_net"])
+        self.epsilon_start = float(checkpoint["epsilon_start"])
+        self.epsilon = float(checkpoint["epsilon"])
+        self.epsilon_end = float(checkpoint["epsilon_end"])
+        self.epsilon_exp_decay = bool(checkpoint["epsilon_exp_decay"])
+        self.epsilon_exp_factor = float(checkpoint["epsilon_exp_factor"])
+        self.epsilon_linear_episodes = int(checkpoint["epsilon_linear_episodes"])
+        self.learn_steps = int(checkpoint["learn_steps"])

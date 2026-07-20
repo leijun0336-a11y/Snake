@@ -69,10 +69,10 @@ fused_size = global_size + local_size + auxiliary_size
    - checkpoint 不再保存池化目标尺寸，架构版本升级。
    - 加载时继续校验 checkpoint 的 Grid 高宽与当前环境一致。
 
-3. checkpoint 兼容策略
-   - 旧 10×10 checkpoint 的张量形状与新结构相同，可做兼容加载。
-   - 默认新网络拒绝旧6×6和20×20 checkpoint，避免错载不同形状的全连接层。
-   - 实施后补充 `q_network_old` 只读评估路径，用于加载版本2历史网络；训练仍只使用新网络。
+3. checkpoint 版本策略
+   - 当前运行时代码只接受架构版本3和完整架构字段。
+   - 非当前版本直接报错，不猜测缺失字段，也不回退到历史网络。
+   - 历史 checkpoint 使用与其匹配的 Git 版本评估。
 
 4. 确定性模式
    - `--deterministic` 改为严格模式，不再使用 `warn_only=True`。
@@ -84,7 +84,7 @@ fused_size = global_size + local_size + auxiliary_size
 - 验证网络输出均为 `[batch_size, 3]`。
 - 验证融合维度分别为508、1020、3420以及公式计算值。
 - 验证网络中不存在 `AdaptiveAvgPool2d`。
-- 验证10×10旧 checkpoint 的兼容加载，以及6×6/20×20旧 checkpoint 的清晰报错。
+- 验证当前版本 checkpoint 的参数化重建，以及非当前版本的清晰报错。
 - 在相同机器和软件环境中运行两次同种子短训练，比较逐步指标和最终权重。
 
 ## 边界与代价
@@ -97,6 +97,6 @@ fused_size = global_size + local_size + auxiliary_size
 ## 确认后的执行顺序
 
 1. 修改网络和配置传递。
-2. 实现checkpoint兼容与错误提示。
+2. 实现严格 checkpoint 版本校验与错误提示。
 3. 更新测试、README和网络结构说明。
 4. 运行完整测试，再进行短程确定性复现验证。

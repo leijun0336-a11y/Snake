@@ -12,7 +12,6 @@ class AIProfile:
     display_name: str
     checkpoint_path: Path
     state_mode: str
-    network_type: str
     width: int
     height: int
     reward_profile: str
@@ -26,7 +25,6 @@ AI_PROFILES: dict[str, AIProfile] = {
         display_name="Snake AI",
         checkpoint_path=CHECKPOINT_DIR / "dqn_20260715_091735" / "best.pt",
         state_mode="hybrid",
-        network_type="q_network",
         width=6,
         height=6,
         reward_profile="experiment8",

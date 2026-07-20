@@ -55,12 +55,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--state-mode", choices=("vector", "grid", "hybrid"), default=None
     )
-    parser.add_argument(
-        "--network",
-        choices=DQNAgent.NETWORK_TYPES,
-        default="q_network",
-        help="Q network implementation used to load the checkpoint",
-    )
     return parser.parse_args()
 
 # 默认提取最近一次实验的 runs/dqn_YYYYMMDD_HHMMSS 目录，若没有则报错。
@@ -210,7 +204,6 @@ def main() -> None:
 
     print(f"checkpoint={checkpoint_path}")
     print(f"state_mode={state_mode}")
-    print(f"network={args.network}")
     if output_dir is not None:
         print(f"output_dir={output_dir}")
 
@@ -241,7 +234,6 @@ def main() -> None:
         # epsilon值的下限(评估时Epsilon-Greedy关闭)
         epsilon_end=0.0,
         state_mode=state_mode,
-        network_type=args.network,
         # load() 会在必要时使用 checkpoint 中的 CNN 参数重建当前默认网络。
         auxiliary_size=env.state_size,
         cnn_channels=train_config.cnn_channels,

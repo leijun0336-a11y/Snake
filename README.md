@@ -53,8 +53,7 @@ src/snake_ai/
 │   ├── snake_env.py       # 环境、状态编码、奖励与终止规则
 │   └── renderer.py        # pygame 渲染
 ├── models/
-│   ├── q_network.py       # 当前 architecture v3
-│   └── q_network_old.py   # 只读的 architecture v2 兼容实现
+│   └── q_network.py       # 当前 architecture v3
 ├── config.py              # 环境、训练与奖励 profile
 ├── validation.py          # 固定种子评估与阶段验证调度
 ├── train.py               # 训练入口
@@ -62,10 +61,8 @@ src/snake_ai/
 └── utils.py               # 随机种子与统计工具
 
 scripts/
-├── benchmark_feature_crop.py
 ├── train_autodl.sh / .ps1
-├── evaluate.sh / .ps1
-└── train_experiment8_autodl.sh
+└── evaluate.sh / .ps1
 ```
 
 ## 安装与测试
@@ -253,22 +250,6 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 
 当 `dueling=False` 时，不再使用 Value/Advantage 分支，而是通过单个 `Linear(256→3)` 直接输出动作 Q 值。当前训练入口默认启用 Dueling。
 
-### 特征裁剪性能基准
-
-CUDA 环境可运行同架构对照基准，比较修改前的 `unfold` 路径和当前直接索引路径：
-
-```bash
-uv run python scripts/benchmark_feature_crop.py
-```
-
-默认使用 `batch=128`，裁剪微基准使用 `8` 个特征通道，完整网络保持默认 `32/8` 主干/投影通道；分别在普通和确定性算法模式下测试 `6×6` 与 `20×20` 棋盘。每组预热 100 次，再运行 500 次并报告中位数。输出指标包括：
-
-- `crop_ms` / `crop_peak_MiB`：局部裁剪前向和反向延迟及预热后的额外峰值显存；
-- `network_ms` / `network_peak_MiB`：完整 Q 网络前向和反向延迟及额外峰值显存；
-- `dqn_steps_s`：包含 policy/target 推理、Huber loss、反向传播和 Adam 更新的核心 GPU DQN 更新吞吐。
-
-可用 `--batch-size`、`--channels`、`--sizes`、`--warmup` 和 `--iterations` 调整规模。该脚本要求 CUDA，没有 GPU 时会直接报错，不回退到 CPU。`dqn_steps_s` 不包含 ReplayBuffer 采样、NumPy 转换、CPU→GPU 传输、梯度裁剪和 target 定期同步，因此不能直接视为完整训练循环吞吐。
-
 ### 状态输入
 
 | 模式 | 输入 | 特点 |
@@ -350,8 +331,6 @@ uv run --extra cu124 python -m snake_ai.train --max-steps-per-episode 1000
 
 未指定 `--max-steps-per-episode` 时，`experiment8` 不设置独立训练步数上限，`reference` 使用 `500`。这只是默认值，不是强制约束，命令行可以覆盖。
 
-`scripts/train_experiment8_autodl.sh` 固定使用历史实验八的奖励和主要训练参数，并设置 `6 × 6 Hybrid`、确定性训练。它使用当前动态棋盘 architecture v3，不复现历史 architecture v2 的自适应池化网络。
-
 ### 阶段验证与 checkpoint
 
 每个训练 run 会生成：
@@ -404,16 +383,7 @@ uv run --extra cpu python -m snake_ai.evaluate --no-render --tensorboard
 
 评估会从 checkpoint 自动读取 `state_mode`，但棋盘 `--width/--height` 仍由命令行决定，必须与 checkpoint 的 `state_size` 一致。
 
-architecture v2 的历史 Grid/Hybrid checkpoint 只有在旧池化尺寸与棋盘尺寸一致时才能由当前 `q_network` 直接加载。其他 v2 checkpoint 需要显式选择只读旧网络：
-
-```bash
-uv run --extra cpu python -m snake_ai.evaluate \
-  --checkpoint checkpoints/dqn_20260712_130642/latest.pt \
-  --network q_network_old \
-  --width 6 --height 6 --no-render
-```
-
-`q_network_old` 只允许评估，不能训练或保存新 checkpoint。
+当前代码只加载 `architecture_version=3` 的 checkpoint，并要求架构元数据完整；不会猜测缺失字段或回退到历史网络。旧 checkpoint 仍可作为实验档案保留，需要评估时应使用与其匹配的历史 Git 版本。
 
 ## 日志、TensorBoard 与 W&B
 
@@ -466,9 +436,7 @@ observation, reward, done, info
 | `torch.backends.cudnn.deterministic` | `False` | `True` |
 | `torch.backends.cudnn.benchmark` | `True` | `False` |
 
-`train_experiment8_autodl.sh` 还会设置 `CUBLAS_WORKSPACE_CONFIG=:4096:8`。阶段验证和独立评估为每个 episode 使用固定且独立的种子，因此同一模型可以在相同局面集合上公平比较。
-
-特征裁剪基准中的 `default/deterministic` 当前只切换 `torch.use_deterministic_algorithms`，用于隔离算子确定性开销，不等同于训练入口的完整 `--deterministic` 设置。
+阶段验证和独立评估为每个 episode 使用固定且独立的种子，因此同一模型可以在相同局面集合上公平比较。
 
 不同 GPU、CUDA、驱动或 PyTorch 版本之间仍可能存在细微差异。
 

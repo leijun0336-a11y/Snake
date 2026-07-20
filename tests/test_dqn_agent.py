@@ -5,7 +5,6 @@ from torch import nn
 
 from snake_ai.agents.dqn_agent import DQNAgent
 from snake_ai.models.q_network import QNetwork
-from snake_ai.models.q_network_old import QNetworkOld
 
 
 def test_dueling_agent_outputs_action() -> None:
@@ -150,35 +149,16 @@ def test_cnn_agent_learns_from_numpy_replay_batch(state_mode: str) -> None:
     assert isinstance(agent.learn(), float)
 
 
-def test_load_legacy_non_dueling_checkpoint(tmp_path) -> None:
-    checkpoint_path = tmp_path / "legacy.pt"
-    legacy_agent = DQNAgent(state_size=11, action_size=3, dueling=False, seed=1)
-    legacy_agent.save(checkpoint_path)
+def test_load_restores_non_dueling_architecture(tmp_path) -> None:
+    checkpoint_path = tmp_path / "non_dueling.pt"
+    source_agent = DQNAgent(state_size=20, action_size=3, dueling=False, seed=1)
+    source_agent.save(checkpoint_path)
 
-    agent = DQNAgent(state_size=11, action_size=3, dueling=True, seed=1)
+    agent = DQNAgent(state_size=20, action_size=3, dueling=True, seed=1)
     agent.load(checkpoint_path)
 
     assert agent.dueling is False
-    assert agent.act([0.0] * 11, training=False) in (0, 1, 2)
-
-
-def test_load_migrates_legacy_epsilon_decay_names(tmp_path) -> None:
-    checkpoint_path = tmp_path / "legacy_epsilon.pt"
-    source_agent = DQNAgent(state_size=11, action_size=3, seed=1)
-    source_agent.save(checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    checkpoint.pop("epsilon_exp_decay")
-    checkpoint.pop("epsilon_exp_factor")
-    checkpoint.pop("epsilon_linear_episodes")
-    checkpoint["epsilon_decay"] = 0.8
-    checkpoint["epsilon_decay_episodes"] = None
-    torch.save(checkpoint, checkpoint_path)
-
-    loaded_agent = DQNAgent(state_size=11, action_size=3, seed=1)
-    loaded_agent.load(checkpoint_path)
-
-    assert loaded_agent.epsilon_exp_decay is True
-    assert loaded_agent.epsilon_exp_factor == 0.8
+    assert agent.act([0.0] * 20, training=False) in (0, 1, 2)
 
 
 def test_load_rejects_incompatible_state_size(tmp_path) -> None:
@@ -255,116 +235,38 @@ def test_save_embeds_resolved_run_config(tmp_path) -> None:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     assert checkpoint["run_config"] == run_config
     assert checkpoint["architecture_version"] == 3
+    assert "network_type" not in checkpoint
     assert "cnn_pool_size" not in checkpoint
 
 
-def test_load_migrates_version2_checkpoint_when_grid_matches_pool_size(tmp_path) -> None:
-    checkpoint_path = tmp_path / "version2_10x10.pt"
-    source_agent = DQNAgent(
-        state_size=(9, 10, 10),
-        action_size=3,
-        state_mode="hybrid",
-        auxiliary_size=20,
-        seed=1,
-    )
+@pytest.mark.parametrize("architecture_version", [None, 1, 2, 4])
+def test_load_rejects_non_current_architecture(
+    tmp_path,
+    architecture_version: int | None,
+) -> None:
+    checkpoint_path = tmp_path / f"architecture_{architecture_version}.pt"
+    source_agent = DQNAgent(state_size=20, action_size=3, seed=1)
     source_agent.save(checkpoint_path)
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    checkpoint["architecture_version"] = 2
-    checkpoint["cnn_pool_size"] = (10, 10)
+    if architecture_version is None:
+        checkpoint.pop("architecture_version")
+    else:
+        checkpoint["architecture_version"] = architecture_version
     torch.save(checkpoint, checkpoint_path)
 
-    loaded_agent = DQNAgent(
-        state_size=(9, 10, 10),
-        action_size=3,
-        state_mode="hybrid",
-        auxiliary_size=20,
-        seed=2,
-    )
-    loaded_agent.load(checkpoint_path)
-
-    assert torch.equal(
-        loaded_agent.policy_net.feature[0].weight,
-        source_agent.policy_net.feature[0].weight,
-    )
-
-
-def test_load_rejects_version2_checkpoint_with_resized_grid(tmp_path) -> None:
-    checkpoint_path = tmp_path / "version2_6x6.pt"
-    source_agent = DQNAgent(
-        state_size=(9, 6, 6),
-        action_size=3,
-        state_mode="hybrid",
-        auxiliary_size=20,
-        seed=1,
-    )
-    source_agent.save(checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    checkpoint["architecture_version"] = 2
-    checkpoint["cnn_pool_size"] = (10, 10)
-    torch.save(checkpoint, checkpoint_path)
-
-    loaded_agent = DQNAgent(
-        state_size=(9, 6, 6),
-        action_size=3,
-        state_mode="hybrid",
-        auxiliary_size=20,
-        seed=2,
-    )
-
-    with pytest.raises(ValueError, match="fixed pooled size"):
+    loaded_agent = DQNAgent(state_size=20, action_size=3, seed=2)
+    with pytest.raises(ValueError, match="requires architecture_version=3"):
         loaded_agent.load(checkpoint_path)
 
 
-def test_q_network_old_loads_version2_resized_checkpoint_for_evaluation(
-    tmp_path,
-) -> None:
-    checkpoint_path = tmp_path / "version2_old_6x6.pt"
-    source_agent = DQNAgent(
-        state_size=(9, 6, 6),
-        action_size=3,
-        state_mode="hybrid",
-        network_type="q_network_old",
-        auxiliary_size=20,
-        seed=1,
-    )
-    torch.save(
-        {
-            "policy_net": source_agent.policy_net.state_dict(),
-            "target_net": source_agent.target_net.state_dict(),
-            "state_size": (9, 6, 6),
-            "state_mode": "hybrid",
-            "auxiliary_size": 20,
-            "cnn_channels": 32,
-            "cnn_output_channels": 8,
-            "cnn_dilations": (1, 1, 2),
-            "cnn_pool_size": (10, 10),
-            "hidden_size": 128,
-            "action_size": 3,
-            "dueling": True,
-            "architecture_version": 2,
-        },
-        checkpoint_path,
-    )
+def test_load_rejects_incomplete_current_checkpoint_without_fallback(tmp_path) -> None:
+    checkpoint_path = tmp_path / "incomplete_v3.pt"
+    source_agent = DQNAgent(state_size=20, action_size=3, seed=1)
+    source_agent.save(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint.pop("target_net")
+    torch.save(checkpoint, checkpoint_path)
 
-    loaded_agent = DQNAgent(
-        state_size=(9, 6, 6),
-        action_size=3,
-        state_mode="hybrid",
-        network_type="q_network_old",
-        auxiliary_size=20,
-        seed=2,
-    )
-    loaded_agent.load(checkpoint_path)
-
-    assert isinstance(loaded_agent.policy_net, QNetworkOld)
-    assert isinstance(loaded_agent.policy_net.global_pool, nn.AdaptiveAvgPool2d)
-    grid = np.zeros((9, 6, 6), dtype=np.float32)
-    grid[3, 3, 3] = 1.0
-    assert loaded_agent.act((grid, [0.0] * 20), training=False) in (0, 1, 2)
-    with pytest.raises(RuntimeError, match="evaluation-only"):
-        loaded_agent.learn()
-
-
-def test_dqn_agent_rejects_unknown_network_type() -> None:
-    with pytest.raises(ValueError, match="network_type"):
-        DQNAgent(state_size=20, action_size=3, network_type="unknown")
+    loaded_agent = DQNAgent(state_size=20, action_size=3, seed=2)
+    with pytest.raises(ValueError, match="missing required fields: target_net"):
+        loaded_agent.load(checkpoint_path)
