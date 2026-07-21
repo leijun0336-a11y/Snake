@@ -23,6 +23,8 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.wandb is False
     assert args.n_step == 1
     assert train_config.n_step == 1
+    assert train_config.learning_rate == pytest.approx(1e-4)
+    assert args.learning_rate == pytest.approx(1e-4)
 
 
 def test_parse_args_enables_wandb_only_when_requested(

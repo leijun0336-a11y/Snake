@@ -125,7 +125,7 @@ class TrainConfig:
     gamma: float = 0.99
     # TD target 聚合的连续真实奖励步数；1 为传统 one-step DQN。
     n_step: int = 1
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e-4
     replay_buffer_size: int = 100_000
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01

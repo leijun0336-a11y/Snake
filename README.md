@@ -28,7 +28,7 @@ uv run --extra cpu snake-play
 | Batch size | `128` |
 | Discount factor `gamma` | `0.99` |
 | TD target 步数 `n-step` | `1` |
-| Learning rate | `0.001` |
+| Learning rate | `0.0001` |
 | Epsilon | 从 `1.0` 线性降至 `0.01`，默认衰减 `7500` 局 |
 | 隐藏层宽度 | `256` |
 | CNN 主干/投影通道 | `32 / 8` |

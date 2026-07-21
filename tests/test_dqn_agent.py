@@ -15,6 +15,13 @@ def test_dueling_agent_outputs_action() -> None:
     assert action in (0, 1, 2)
 
 
+def test_agent_default_learning_rate_is_one_e_minus_four() -> None:
+    agent = DQNAgent(state_size=20, action_size=3, seed=1)
+
+    assert agent.learning_rate == pytest.approx(1e-4)
+    assert agent.optimizer.param_groups[0]["lr"] == pytest.approx(1e-4)
+
+
 def test_grid_agent_outputs_action() -> None:
     agent = DQNAgent(
         state_size=(9, 6, 6),

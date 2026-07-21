@@ -25,7 +25,7 @@ class DQNAgent:
         # Q 网络隐藏层神经元数量。
         hidden_size: int = 128,
         # Adam 优化器学习率，控制神经网络参数更新步幅。
-        learning_rate: float = 1e-3,
+        learning_rate: float = 1e-4,
         # 折扣因子，越接近 1 越重视未来奖励。
         gamma: float = 0.99,
         # TD target 使用的真实奖励步数；1 保持传统 one-step DQN。
