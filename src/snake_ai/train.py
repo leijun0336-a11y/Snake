@@ -33,6 +33,9 @@ from snake_ai.validation import (
 )
 from snake_ai.wandb_logging import WandbRun, start_wandb, training_metrics
 
+
+TRAINING_START_DELAY_SECONDS = 5
+
 try:
     from torch.utils.tensorboard import SummaryWriter
 # 如果用户没装 TensorBoard，就让它等于 None
@@ -369,6 +372,28 @@ def format_train_report(
     return "\n".join(lines)
 
 
+def count_agent_parameters(agent: DQNAgent | PPOAgent) -> dict[str, int]:
+    """Count policy capacity, optimized parameters, and all stored network parameters."""
+
+    policy_parameters = sum(parameter.numel() for parameter in agent.policy_net.parameters())
+    optimized_parameters = {
+        id(parameter): parameter
+        for group in agent.optimizer.param_groups
+        for parameter in group["params"]
+    }
+    network_parameters = {
+        id(parameter): parameter
+        for network_name in ("policy_net", "target_net")
+        if (network := getattr(agent, network_name, None)) is not None
+        for parameter in network.parameters()
+    }
+    return {
+        "policy": policy_parameters,
+        "optimized": sum(parameter.numel() for parameter in optimized_parameters.values()),
+        "all_networks": sum(parameter.numel() for parameter in network_parameters.values()),
+    }
+
+
 def main() -> None:
     args = parse_args()
     train_config, env_config = build_configs(args)
@@ -546,6 +571,10 @@ def main() -> None:
             else str(train_config.max_steps_per_episode)
         )
     )
+    parameter_counts = count_agent_parameters(agent)
+    print(f"policy_parameters={parameter_counts['policy']:,}")
+    print(f"optimized_parameters={parameter_counts['optimized']:,}")
+    print(f"all_network_parameters={parameter_counts['all_networks']:,}")
 
     # 每局得分历史，用于计算 mean_score_100 和生成 train/report。
     scores: list[int] = []
@@ -760,6 +789,10 @@ def main() -> None:
                     run_dir=run_dir,
                     config=run_config,
                 )
+
+            print(f"training_starts_in={TRAINING_START_DELAY_SECONDS}s", flush=True)
+            time.sleep(TRAINING_START_DELAY_SECONDS)
+            train_start_time = time.perf_counter()
 
             for episode in range(1, train_config.episodes + 1):
                 state = env.reset()

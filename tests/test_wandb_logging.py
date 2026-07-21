@@ -53,8 +53,8 @@ def test_training_metrics_matches_every_reference_curve() -> None:
         "steps_rolling50": 20.0,
         "loss": 0.25,
         "mean_loss_100": 0.5,
-        "epsilon": 0.75,
-        "replay_buffer_size": 60,
+        "DQN-only/epsilon": 0.75,
+        "DQN-only/replay_buffer_size": 60,
     }
 
 
@@ -79,8 +79,8 @@ def test_training_metrics_emits_ppo_diagnostics_only_after_update() -> None:
 
     assert "loss" not in before_update
     assert after_update["loss"] == pytest.approx(0.25)
-    assert after_update["policy_loss"] == pytest.approx(-0.1)
-    assert after_update["approx_kl"] == pytest.approx(0.01)
+    assert after_update["PPO-only/policy_loss"] == pytest.approx(-0.1)
+    assert after_update["PPO-only/approx_kl"] == pytest.approx(0.01)
 
 
 def test_start_wandb_uses_snake_project_and_episode_axis(
@@ -192,17 +192,29 @@ def test_configure_workspace_keeps_reference_panel_order(
 
     url = wandb_logging.configure_workspace("entity", "Snake", "run-id", "dqn_test")
 
-    section = captured["sections"][0]
+    sections = captured["sections"]
     assert url == "https://wandb.invalid/workspace"
-    assert (section.layout_settings.columns, section.layout_settings.rows) == (2, 3)
-    assert [panel.title for panel in section.panels] == [
+    assert [section.name for section in sections] == ["Charts", "DQN-only"]
+    assert (sections[0].layout_settings.columns, sections[0].layout_settings.rows) == (2, 2)
+    assert [panel.title for panel in sections[0].panels] == [
         "Score",
         "Reward",
         "Episode Steps",
         "Loss",
+    ]
+    assert [panel.title for panel in sections[1].panels] == [
         "Epsilon",
         "Replay Buffer Size",
     ]
-    assert section.panels[0].y == ["score", "score_rolling50", "mean_score_100"]
-    assert section.panels[0].line_colors["run-id:score"] == "#9ecae1"
+    assert sections[0].panels[0].y == ["score", "score_rolling50", "mean_score_100"]
+    assert sections[0].panels[0].line_colors["run-id:score"] == "#9ecae1"
     assert captured["runset_settings"].filters == "Name = 'dqn_test'"
+
+    wandb_logging.configure_workspace("entity", "Snake", "run-id", "ppo_test")
+    sections = captured["sections"]
+    assert [section.name for section in sections] == ["Charts", "PPO-only"]
+    assert [panel.title for panel in sections[1].panels] == [
+        "Policy and Value Losses",
+        "Entropy",
+        "PPO Diagnostics",
+    ]

@@ -84,40 +84,7 @@ def configure_workspace(entity: str, project: str, run_id: str, run_name: str) -
             colors=["#f8d49a", "#cc6e12"],
             widths=[0.5, 2.0],
         ),
-    ]
-    if run_name.startswith("ppo_"):
-        algorithm_panels = [
-            _line_plot(
-                wr,
-                run_id=run_id,
-                title="PPO Losses",
-                metrics=["loss", "policy_loss", "value_loss"],
-                y_axis="Loss",
-                colors=["#6f2cff", "#1685e5", "#e31a1c"],
-                widths=[2.0, 1.5, 1.5],
-            ),
-            _line_plot(
-                wr,
-                run_id=run_id,
-                title="Entropy",
-                metrics=["entropy"],
-                y_axis="Entropy",
-                colors=["#168c8c"],
-                widths=[2.0],
-            ),
-            _line_plot(
-                wr,
-                run_id=run_id,
-                title="PPO Diagnostics",
-                metrics=["approx_kl", "clip_fraction", "explained_variance"],
-                y_axis="Value",
-                colors=["#e31a1c", "#cc6e12", "#159447"],
-                widths=[2.0, 2.0, 2.0],
-            ),
-        ]
-    else:
-        algorithm_panels = [
-            _line_plot(
+        _line_plot(
             wr,
             run_id=run_id,
             title="Loss",
@@ -126,11 +93,49 @@ def configure_workspace(entity: str, project: str, run_id: str, run_name: str) -
             colors=["#d8c8fa", "#6f2cff"],
             widths=[0.5, 2.0],
         ),
+    ]
+    if run_name.startswith("ppo_"):
+        algorithm_panels = [
+            _line_plot(
+                wr,
+                run_id=run_id,
+                title="Policy and Value Losses",
+                metrics=["PPO-only/policy_loss", "PPO-only/value_loss"],
+                y_axis="Loss",
+                colors=["#1685e5", "#e31a1c"],
+                widths=[2.0, 2.0],
+            ),
+            _line_plot(
+                wr,
+                run_id=run_id,
+                title="Entropy",
+                metrics=["PPO-only/entropy"],
+                y_axis="Entropy",
+                colors=["#168c8c"],
+                widths=[2.0],
+            ),
+            _line_plot(
+                wr,
+                run_id=run_id,
+                title="PPO Diagnostics",
+                metrics=[
+                    "PPO-only/approx_kl",
+                    "PPO-only/clip_fraction",
+                    "PPO-only/explained_variance",
+                ],
+                y_axis="Value",
+                colors=["#e31a1c", "#cc6e12", "#159447"],
+                widths=[2.0, 2.0, 2.0],
+            ),
+        ]
+        algorithm_section_name = "PPO-only"
+    else:
+        algorithm_panels = [
             _line_plot(
             wr,
             run_id=run_id,
             title="Epsilon",
-            metrics=["epsilon"],
+            metrics=["DQN-only/epsilon"],
             y_axis="Epsilon",
             colors=["#168c8c"],
             widths=[2.0],
@@ -139,25 +144,35 @@ def configure_workspace(entity: str, project: str, run_id: str, run_name: str) -
             wr,
             run_id=run_id,
             title="Replay Buffer Size",
-            metrics=["replay_buffer_size"],
+            metrics=["DQN-only/replay_buffer_size"],
             y_axis="Transitions",
             colors=["#596b7d"],
             widths=[2.0],
             ),
         ]
-    panels = common_panels + algorithm_panels
+        algorithm_section_name = "DQN-only"
+    sections = [
+        ws.Section(
+            name="Charts",
+            panels=common_panels,
+            is_open=True,
+            layout_settings=ws.SectionLayoutSettings(columns=2, rows=2),
+        ),
+        ws.Section(
+            name=algorithm_section_name,
+            panels=algorithm_panels,
+            is_open=True,
+            layout_settings=ws.SectionLayoutSettings(
+                columns=2,
+                rows=(len(algorithm_panels) + 1) // 2,
+            ),
+        ),
+    ]
     workspace = ws.Workspace(
         name=f"{WANDB_WORKSPACE} - {run_name}",
         entity=entity,
         project=project,
-        sections=[
-            ws.Section(
-                name="Training Curves",
-                panels=panels,
-                is_open=True,
-                layout_settings=ws.SectionLayoutSettings(columns=2, rows=3),
-            )
-        ],
+        sections=sections,
         settings=ws.WorkspaceSettings(
             x_axis="episode",
             smoothing_type="none",
@@ -245,14 +260,16 @@ def training_metrics(
             {
                 "loss": loss,
                 "mean_loss_100": mean_loss_100,
-                "epsilon": epsilon,
-                "replay_buffer_size": replay_buffer_size,
+                "DQN-only/epsilon": epsilon,
+                "DQN-only/replay_buffer_size": replay_buffer_size,
             }
         )
     elif algorithm == "ppo":
         if ppo_metrics:
             metrics.update({"loss": loss, "mean_loss_100": mean_loss_100})
-            metrics.update(ppo_metrics)
+            metrics.update(
+                {f"PPO-only/{name}": value for name, value in ppo_metrics.items()}
+            )
     else:
         raise ValueError(f"unsupported algorithm: {algorithm}")
     return metrics

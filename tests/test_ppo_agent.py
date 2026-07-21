@@ -6,6 +6,7 @@ import torch
 
 from snake_ai.agents.dqn_agent import DQNAgent
 from snake_ai.agents.ppo_agent import PPOAgent, PPOMetrics, RolloutTransition
+from snake_ai.train import count_agent_parameters
 
 
 def test_ppo_agent_uses_current_default_learning_rate() -> None:
@@ -33,6 +34,12 @@ def test_hybrid_ppo_policy_matches_dueling_dqn_policy_capacity() -> None:
     assert sum(parameter.numel() for parameter in dqn.policy_net.parameters()) == sum(
         parameter.numel() for parameter in ppo.policy_net.parameters()
     )
+    dqn_counts = count_agent_parameters(dqn)
+    ppo_counts = count_agent_parameters(ppo)
+    assert dqn_counts["optimized"] == dqn_counts["policy"]
+    assert dqn_counts["all_networks"] == 2 * dqn_counts["policy"]
+    assert ppo_counts["optimized"] == ppo_counts["policy"]
+    assert ppo_counts["all_networks"] == ppo_counts["policy"]
 
 
 @pytest.mark.parametrize("state_mode", ["vector", "grid", "hybrid"])

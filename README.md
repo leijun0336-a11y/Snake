@@ -455,7 +455,7 @@ uv run tensorboard --logdir runs
 
 浏览器打开 `http://localhost:6006`。同一 run 中 `.train` 和 `.eval` event 可以同时存在，分别使用 `train/*`、`validation/*` 与 `eval/*` tag。
 
-`--wandb` 的公共前三个面板为 Score、Reward 和 Episode Steps。DQN 的后三个面板保持为 Loss、Epsilon 和 Replay Buffer Size；PPO 的后三个面板为 PPO Losses、Entropy 和 PPO Diagnostics（KL、clip fraction、explained variance）。
+`--wandb` 的 `Charts` section 只放两个算法共有的 Score、Reward、Episode Steps 和 Loss。DQN 专属 metric 使用 `DQN-only/...` 命名空间，PPO 专属 metric 使用 `PPO-only/...` 命名空间，因此 W&B 原生页面也会自动拆分 section。自定义 saved view 中，DQN run 额外创建 `DQN-only`，包含 Epsilon 和 Replay Buffer Size；PPO run 额外创建 `PPO-only`，包含 Policy/Value Losses、Entropy 和 PPO Diagnostics（KL、clip fraction、explained variance）。每个 run 不创建与自身算法无关的空 section。
 
 DQN 布局：
 

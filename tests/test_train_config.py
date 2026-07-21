@@ -2,7 +2,12 @@ import sys
 
 import pytest
 
-from snake_ai.train import build_configs, build_ppo_config, parse_args
+from snake_ai.train import (
+    TRAINING_START_DELAY_SECONDS,
+    build_configs,
+    build_ppo_config,
+    parse_args,
+)
 
 
 def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -26,6 +31,7 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert train_config.learning_rate == pytest.approx(1e-4)
     assert args.learning_rate == pytest.approx(1e-4)
     assert args.algorithm == "dqn"
+    assert TRAINING_START_DELAY_SECONDS == 5
 
 
 def test_ppo_config_uses_aligned_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
