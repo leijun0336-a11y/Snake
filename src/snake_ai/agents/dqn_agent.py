@@ -14,6 +14,7 @@ from snake_ai.models.q_network import QNetwork
 
 
 class DQNAgent:
+    ALGORITHM = "dqn"
     ARCHITECTURE_VERSION = 3
 
     def __init__(
@@ -300,6 +301,7 @@ class DQNAgent:
         # 如果父目录不存在，连带创建父母，如果当前目录已经存在也不要报错
         path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint = {
+            "algorithm": self.ALGORITHM,
             # 正在训练和决策使用的 Q 网络参数。
             "policy_net": self.policy_net.state_dict(),
             # 用于计算 DQN 目标值的目标网络参数。

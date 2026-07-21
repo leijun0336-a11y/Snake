@@ -223,9 +223,11 @@ class QNetwork(nn.Module):
         # 默认得到 [B,8*H*W+200]，同时保留全局布局和蛇头附近的精确格子信息。
         return torch.cat((global_features, local_features), dim=1)
 
-    def forward(
+    def encode(
         self, x: torch.Tensor | tuple[torch.Tensor, torch.Tensor]
     ) -> torch.Tensor:
+        """Encode an observation with the shared Vector/Grid/Hybrid backbone."""
+
         if self.state_mode == "hybrid":
             # Hybrid: 动态空间特征 + 20维人工特征 -> hidden_size 维共享决策特征。
             grid, auxiliary_state = x
@@ -240,6 +242,13 @@ class QNetwork(nn.Module):
         else:
             # Vector: 20维人工状态直接通过 MLP。
             features = self.feature(x)
+
+        return features
+
+    def forward(
+        self, x: torch.Tensor | tuple[torch.Tensor, torch.Tensor]
+    ) -> torch.Tensor:
+        features = self.encode(x)
 
         if not self.dueling:
             return self.head(features)

@@ -142,3 +142,17 @@ class TrainConfig:
     # 三个卷积块中对应的膨胀率，分别为 1、1、2。
     cnn_dilations: tuple[int, ...] = (1, 1, 2)
     seed: int = 42
+
+
+@dataclass(frozen=True)
+class PPOConfig:
+    rollout_steps: int = 2048
+    update_epochs: int = 4
+    gae_lambda: float = 0.95
+    clip_coefficient: float = 0.2
+    value_clip_coefficient: float = 0.2
+    entropy_coefficient: float = 0.01
+    value_loss_coefficient: float = 0.5
+    max_grad_norm: float = 0.5
+    target_kl: float | None = 0.02
+    normalize_advantage: bool = True

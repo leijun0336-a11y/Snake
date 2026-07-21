@@ -58,6 +58,31 @@ def test_training_metrics_matches_every_reference_curve() -> None:
     }
 
 
+def test_training_metrics_emits_ppo_diagnostics_only_after_update() -> None:
+    common = dict(
+        episode=3,
+        scores=[1, 2, 6],
+        mean_score_100=3.0,
+        episode_reward=12.5,
+        mean_reward_100=4.5,
+        episode_steps=[10, 20, 30],
+        loss=0.25,
+        mean_loss_100=0.5,
+        algorithm="ppo",
+    )
+
+    before_update = wandb_logging.training_metrics(**common)
+    after_update = wandb_logging.training_metrics(
+        **common,
+        ppo_metrics={"policy_loss": -0.1, "approx_kl": 0.01},
+    )
+
+    assert "loss" not in before_update
+    assert after_update["loss"] == pytest.approx(0.25)
+    assert after_update["policy_loss"] == pytest.approx(-0.1)
+    assert after_update["approx_kl"] == pytest.approx(0.01)
+
+
 def test_start_wandb_uses_snake_project_and_episode_axis(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

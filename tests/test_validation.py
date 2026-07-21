@@ -441,6 +441,30 @@ def test_staged_validation_initializes_only_at_epsilon_floor() -> None:
     assert state.best_training_episode == 10_000
 
 
+def test_staged_validation_can_use_algorithm_neutral_selection_gate() -> None:
+    quick = make_result("quick", episodes=100, mean_score=1.0, full_rate=0.0)
+    confirmation = make_result(
+        "confirmation", episodes=500, mean_score=1.0, full_rate=0.0
+    )
+    state = StagedValidationState()
+
+    decision = run_staged_validation(
+        episode=15_000,
+        state=state,
+        evaluator=lambda seed_set: quick if seed_set == "quick" else confirmation,
+        interval=1_000,
+        early_stop_enabled=True,
+        min_episodes=15_000,
+        patience=8,
+        target_mean_score=None,
+        selection_ready=True,
+    )
+
+    assert decision.best_updated
+    assert state.selection_start_episode == 15_000
+    assert state.best_training_episode == 15_000
+
+
 def test_patience_runs_final_confirmation_before_stopping() -> None:
     best_quick = make_result("quick", episodes=100, mean_score=28.0, full_rate=0.60)
     best_confirmation = make_result(

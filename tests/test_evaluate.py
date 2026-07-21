@@ -6,6 +6,7 @@ import pytest
 from snake_ai.evaluate import (
     build_configs,
     find_latest_checkpoint,
+    get_checkpoint_algorithm,
     open_eval_metrics_csv,
     parse_args,
 )
@@ -21,6 +22,24 @@ def test_build_configs_resolves_evaluation_defaults(
     assert train_config.seed == 42
     assert env_config.width == 20
     assert env_config.height == 20
+
+
+def test_build_configs_reads_board_size_from_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import torch
+
+    checkpoint_path = tmp_path / "latest.pt"
+    torch.save(
+        {"run_config": {"environment": {"width": 10, "height": 10}}},
+        checkpoint_path,
+    )
+    monkeypatch.setattr(sys, "argv", ["evaluate.py"])
+
+    _, env_config = build_configs(parse_args(), checkpoint_path)
+
+    assert (env_config.width, env_config.height) == (10, 10)
 
 
 def test_build_configs_matches_environment_minimum_size(
@@ -44,6 +63,30 @@ def test_find_latest_checkpoint_uses_latest_experiment_latest_pt(
     (newer / "best.pt").touch()
 
     assert find_latest_checkpoint(tmp_path) == newer / "latest.pt"
+
+
+def test_find_latest_checkpoint_compares_dqn_and_ppo_timestamps(tmp_path: Path) -> None:
+    dqn = tmp_path / "dqn_20260103_000000"
+    ppo = tmp_path / "ppo_20260102_000000"
+    dqn.mkdir()
+    ppo.mkdir()
+    (dqn / "latest.pt").touch()
+    (ppo / "latest.pt").touch()
+
+    assert find_latest_checkpoint(tmp_path) == dqn / "latest.pt"
+    assert find_latest_checkpoint(tmp_path, algorithm="ppo") == ppo / "latest.pt"
+
+
+def test_checkpoint_algorithm_defaults_legacy_checkpoint_to_dqn(tmp_path: Path) -> None:
+    import torch
+
+    legacy = tmp_path / "legacy.pt"
+    ppo = tmp_path / "ppo.pt"
+    torch.save({"policy_net": {}}, legacy)
+    torch.save({"algorithm": "ppo", "policy_net": {}}, ppo)
+
+    assert get_checkpoint_algorithm(legacy) == "dqn"
+    assert get_checkpoint_algorithm(ppo) == "ppo"
 
 
 def test_find_latest_checkpoint_does_not_fallback_to_best_pt(tmp_path: Path) -> None:

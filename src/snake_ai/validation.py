@@ -176,8 +176,6 @@ def validation_patience_exhausted(current_rounds: int, patience: int) -> bool:
 def run_staged_validation(
     *,            # `*` 后面的参数必须通过“参数名=值”的方式传入。
     episode: int,
-    epsilon: float,
-    epsilon_end: float,
     state: StagedValidationState,
     evaluator: Callable[[SeedSetName], ValidationResult],
     interval: int,
@@ -186,10 +184,19 @@ def run_staged_validation(
     patience: int,
     target_mean_score: float | None,
     thresholds: SelectionThresholds = DEFAULT_SELECTION_THRESHOLDS,
+    epsilon: float | None = None,
+    epsilon_end: float | None = None,
+    selection_ready: bool | None = None,
 ) -> StagedValidationDecision:
 
     if state.selection_start_episode is None:
-        if not epsilon_at_floor(epsilon, epsilon_end):
+        if selection_ready is None:
+            if epsilon is None or epsilon_end is None:
+                raise ValueError(
+                    "epsilon and epsilon_end are required when selection_ready is omitted"
+                )
+            selection_ready = epsilon_at_floor(epsilon, epsilon_end)
+        if not selection_ready:
             return StagedValidationDecision()
         quick = evaluator("quick")
         confirmation = evaluator("confirmation")

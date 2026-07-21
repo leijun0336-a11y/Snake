@@ -12,7 +12,7 @@ from typing import Any, TextIO
 
 import torch
 
-from snake_ai.agents import DQNAgent
+from snake_ai.agents import DQNAgent, PPOAgent
 from snake_ai.config import CHECKPOINT_DIR, RUNS_DIR, EnvConfig, TrainConfig
 from snake_ai.game import SnakeEnv
 from snake_ai.utils import set_seed, summarize_values
@@ -35,16 +35,17 @@ except ImportError:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate a trained Snake DQN agent.")
-    # 不传时默认加载 checkpoints/<最新 dqn_*>/latest.pt；显式传入时使用用户指定路径。
+    parser = argparse.ArgumentParser(description="Evaluate a trained Snake DQN or PPO agent.")
+    # 不传时默认加载 checkpoints 下时间最新的 DQN/PPO 实验。
     parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument("--algorithm", choices=("dqn", "ppo"), default=None)
     parser.add_argument("--episodes", type=int, default=1000)
     # 防止转圈。
     parser.add_argument("--max-steps",type=int,default=1000)
     # 不渲染，默认渲染。
     parser.add_argument("--no-render", action="store_true")
-    parser.add_argument("--width", type=int, default=EnvConfig.width)
-    parser.add_argument("--height", type=int, default=EnvConfig.height)
+    parser.add_argument("--width", type=int, default=None)
+    parser.add_argument("--height", type=int, default=None)
     parser.add_argument("--cell-size", type=int, default=EnvConfig.cell_size)
     parser.add_argument("--fps", type=int, default=EnvConfig.fps)
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
@@ -57,25 +58,41 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-# 默认提取最近一次实验的 runs/dqn_YYYYMMDD_HHMMSS 目录，若没有则报错。
-def find_latest_run_dir(runs_dir: Path = RUNS_DIR) -> Path:
-    # 训练脚本会生成 runs/dqn_YYYYMMDD_HHMMSS 目录，这里按目录名时间取最新的一个。
-    run_dirs = [path for path in runs_dir.glob("dqn_*") if path.is_dir()]
+def _experiment_dirs(root: Path, algorithm: str | None = None) -> list[Path]:
+    prefixes = (algorithm,) if algorithm is not None else ("dqn", "ppo")
+    return [
+        path
+        for prefix in prefixes
+        for path in root.glob(f"{prefix}_*")
+        if path.is_dir()
+    ]
+
+
+def _experiment_timestamp(path: Path) -> str:
+    return path.name.split("_", maxsplit=1)[1]
+
+
+# 默认提取 DQN/PPO 中最近一次实验的 run 目录，若没有则报错。
+def find_latest_run_dir(runs_dir: Path = RUNS_DIR, algorithm: str | None = None) -> Path:
+    run_dirs = _experiment_dirs(runs_dir, algorithm)
     if not run_dirs:
         raise FileNotFoundError(f"No training run directory found in {runs_dir}")
-    return max(run_dirs, key=lambda path: path.name)
+    return max(run_dirs, key=_experiment_timestamp)
 
 
 # 默认提取最近一次实验的权重，权重默认取latest.pt，若没有latest.pt则取best.pt
-def find_latest_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
-    checkpoint_dirs = [path for path in checkpoint_dir.glob("dqn_*") if path.is_dir()]
+def find_latest_checkpoint(
+    checkpoint_dir: Path = CHECKPOINT_DIR,
+    algorithm: str | None = None,
+) -> Path:
+    checkpoint_dirs = _experiment_dirs(checkpoint_dir, algorithm)
     if not checkpoint_dirs:
         legacy_checkpoint = checkpoint_dir / "latest.pt"
         if legacy_checkpoint.exists():
             return legacy_checkpoint
         raise FileNotFoundError(f"No checkpoint directory found in {checkpoint_dir}")
 
-    latest_dir = max(checkpoint_dirs, key=lambda path: path.name)
+    latest_dir = max(checkpoint_dirs, key=_experiment_timestamp)
     latest_checkpoint = latest_dir / "latest.pt"
     if not latest_checkpoint.exists():
         raise FileNotFoundError(
@@ -88,7 +105,7 @@ def find_latest_checkpoint(checkpoint_dir: Path = CHECKPOINT_DIR) -> Path:
 def find_run_dir_for_checkpoint(checkpoint_path: Path, runs_dir: Path = RUNS_DIR) -> Path:
 
     run_name = checkpoint_path.parent.name
-    if run_name.startswith("dqn_"):
+    if run_name.startswith(("dqn_", "ppo_")):
         return runs_dir / run_name
     return find_latest_run_dir(runs_dir)
 
@@ -153,23 +170,56 @@ def get_checkpoint_state_mode(checkpoint_path: Path) -> str:
     return str(checkpoint.get("state_mode", "vector"))
 
 
+def get_checkpoint_algorithm(checkpoint_path: Path) -> str:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    algorithm = checkpoint.get("algorithm")
+    if algorithm is None:
+        run_config = checkpoint.get("run_config")
+        if isinstance(run_config, dict):
+            algorithm = run_config.get("algorithm")
+    if algorithm is None:
+        return "dqn"
+    algorithm = str(algorithm)
+    if algorithm not in ("dqn", "ppo"):
+        raise ValueError(f"Unsupported checkpoint algorithm={algorithm!r}")
+    return algorithm
+
+
+def get_checkpoint_environment(checkpoint_path: Path) -> dict[str, Any]:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    run_config = checkpoint.get("run_config")
+    if not isinstance(run_config, dict):
+        return {}
+    environment = run_config.get("environment")
+    return dict(environment) if isinstance(environment, dict) else {}
+
+
 # 校验评估参数并构造最终配置。
-def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
+def build_configs(
+    args: argparse.Namespace,
+    checkpoint_path: Path | None = None,
+) -> tuple[TrainConfig, EnvConfig]:
 
-
+    checkpoint_environment = (
+        get_checkpoint_environment(checkpoint_path) if checkpoint_path is not None else {}
+    )
+    width = args.width if args.width is not None else checkpoint_environment.get("width", EnvConfig.width)
+    height = (
+        args.height if args.height is not None else checkpoint_environment.get("height", EnvConfig.height)
+    )
     if args.episodes < 1:
         raise ValueError("episodes must be at least 1")
     if args.max_steps < 1:
         raise ValueError("max_steps must be at least 1")
-    if args.width < 5 or args.height < 5:
+    if width < 5 or height < 5:
         raise ValueError("width and height must be at least 5")
     if args.cell_size < 1 or args.fps < 1:
         raise ValueError("cell_size and fps must be positive")
 
     train_config = TrainConfig(seed=args.seed)
     env_config = EnvConfig(
-        width=args.width,
-        height=args.height,
+        width=int(width),
+        height=int(height),
         cell_size=args.cell_size,
         fps=args.fps,
     )
@@ -178,11 +228,15 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
 
 def main() -> None:
     args = parse_args()
-    train_config, env_config = build_configs(args)
-    set_seed(train_config.seed)
-    
     # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 latest.pt。
-    checkpoint_path = args.checkpoint or find_latest_checkpoint()
+    checkpoint_path = args.checkpoint or find_latest_checkpoint(algorithm=args.algorithm)
+    train_config, env_config = build_configs(args, checkpoint_path)
+    set_seed(train_config.seed)
+    algorithm = get_checkpoint_algorithm(checkpoint_path)
+    if args.algorithm is not None and algorithm != args.algorithm:
+        raise ValueError(
+            f"Checkpoint algorithm={algorithm!r} does not match --algorithm {args.algorithm!r}"
+        )
     # 默认使用 checkpoint 记录的模式，避免手动选择错误的网络输入结构。
     state_mode = args.state_mode or get_checkpoint_state_mode(checkpoint_path)
 
@@ -203,6 +257,7 @@ def main() -> None:
     csv_path = output_dir / "eval_metrics.csv" if output_dir is not None else None
 
     print(f"checkpoint={checkpoint_path}")
+    print(f"algorithm={algorithm}")
     print(f"state_mode={state_mode}")
     if output_dir is not None:
         print(f"output_dir={output_dir}")
@@ -221,7 +276,7 @@ def main() -> None:
         # 与训练保持一致，由环境直接返回 checkpoint 所需模式的 observation。
         state_mode=state_mode,
     )
-    agent = DQNAgent(
+    common_agent_kwargs = dict(
         # 状态维度
         state_size=(
             env.grid_state_shape if state_mode in ("grid", "hybrid") else env.state_size
@@ -229,10 +284,6 @@ def main() -> None:
         # 动作维度
         action_size=env.action_size,
         hidden_size=train_config.hidden_size,
-        # 起始epsilon值(Epsilon-Greedy在评估时关闭)
-        epsilon_start=0.0,
-        # epsilon值的下限(评估时Epsilon-Greedy关闭)
-        epsilon_end=0.0,
         state_mode=state_mode,
         # load() 会在必要时使用 checkpoint 中的 CNN 参数重建当前默认网络。
         auxiliary_size=env.state_size,
@@ -241,6 +292,14 @@ def main() -> None:
         cnn_dilations=train_config.cnn_dilations,
         seed=train_config.seed,
     )
+    if algorithm == "ppo":
+        agent = PPOAgent(**common_agent_kwargs)
+    else:
+        agent = DQNAgent(
+            **common_agent_kwargs,
+            epsilon_start=0.0,
+            epsilon_end=0.0,
+        )
 
     # 加载模型参数用于测试
     agent.load(checkpoint_path)

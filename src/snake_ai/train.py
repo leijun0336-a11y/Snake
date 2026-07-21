@@ -10,12 +10,14 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from snake_ai.agents import DQNAgent
+from snake_ai.agents import DQNAgent, PPOAgent
+from snake_ai.agents.ppo_agent import PPOMetrics
 from snake_ai.config import (
     CHECKPOINT_DIR,
     REWARD_PROFILE_NAMES,
     RUNS_DIR,
     EnvConfig,
+    PPOConfig,
     TrainConfig,
 )
 from snake_ai.game import SnakeEnv
@@ -40,7 +42,8 @@ except ImportError:
 
 # 解析启动脚本时的命令行参数
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train a DQN agent for Snake.")
+    parser = argparse.ArgumentParser(description="Train a DQN or PPO agent for Snake.")
+    parser.add_argument("--algorithm", choices=("dqn", "ppo"), default="dqn")
     # 最大训练局数；早停没有触发时，训练最多跑到这个 episode。
     parser.add_argument("--max-episodes", type=int, default=TrainConfig.episodes)
     # 限制蛇的最大步数，防止无限绕圈。
@@ -103,6 +106,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cnn-channels", type=int, default=TrainConfig.cnn_channels)
     parser.add_argument("--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels)
     parser.add_argument("--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations)
+    parser.add_argument("--ppo-rollout-steps", type=int, default=PPOConfig.rollout_steps)
+    parser.add_argument("--ppo-update-epochs", type=int, default=PPOConfig.update_epochs)
+    parser.add_argument("--ppo-gae-lambda", type=float, default=PPOConfig.gae_lambda)
+    parser.add_argument("--ppo-clip-coefficient", type=float, default=PPOConfig.clip_coefficient)
+    parser.add_argument(
+        "--ppo-value-clip-coefficient",
+        type=float,
+        default=PPOConfig.value_clip_coefficient,
+    )
+    parser.add_argument(
+        "--ppo-entropy-coefficient", type=float, default=PPOConfig.entropy_coefficient
+    )
+    parser.add_argument(
+        "--ppo-value-loss-coefficient",
+        type=float,
+        default=PPOConfig.value_loss_coefficient,
+    )
+    parser.add_argument("--ppo-max-grad-norm", type=float, default=PPOConfig.max_grad_norm)
+    parser.add_argument("--ppo-target-kl", type=float, default=PPOConfig.target_kl)
+    parser.add_argument(
+        "--ppo-normalize-advantage",
+        action=argparse.BooleanOptionalAction,
+        default=PPOConfig.normalize_advantage,
+    )
     # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
     parser.add_argument("--early-stop", action="store_true")
     # 至少训练多少局后，才允许基于阶段验证的早停判断生效。
@@ -176,6 +203,25 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("CNN channel sizes must be positive")
     if any(dilation <= 0 for dilation in args.cnn_dilations):
         raise ValueError("cnn_dilations must contain positive integers")
+    if args.algorithm == "ppo":
+        if args.ppo_rollout_steps < 1:
+            raise ValueError("ppo_rollout_steps must be at least 1")
+        if args.batch_size > args.ppo_rollout_steps:
+            raise ValueError("batch_size must not exceed ppo_rollout_steps")
+        if args.ppo_rollout_steps % args.batch_size != 0:
+            raise ValueError("ppo_rollout_steps must be divisible by batch_size")
+        if args.ppo_update_epochs < 1:
+            raise ValueError("ppo_update_epochs must be at least 1")
+        if not 0.0 <= args.ppo_gae_lambda <= 1.0:
+            raise ValueError("ppo_gae_lambda must be between 0 and 1")
+        if args.ppo_clip_coefficient <= 0.0 or args.ppo_value_clip_coefficient <= 0.0:
+            raise ValueError("PPO clip coefficients must be positive")
+        if args.ppo_entropy_coefficient < 0.0 or args.ppo_value_loss_coefficient < 0.0:
+            raise ValueError("PPO loss coefficients must be non-negative")
+        if args.ppo_max_grad_norm <= 0.0:
+            raise ValueError("ppo_max_grad_norm must be positive")
+        if args.ppo_target_kl is not None and args.ppo_target_kl <= 0.0:
+            raise ValueError("ppo_target_kl must be positive")
 
     train_config = TrainConfig(
         episodes=max_episodes,
@@ -206,22 +252,41 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
     return train_config, env_config
 
 
+def build_ppo_config(args: argparse.Namespace) -> PPOConfig:
+    return PPOConfig(
+        rollout_steps=args.ppo_rollout_steps,
+        update_epochs=args.ppo_update_epochs,
+        gae_lambda=args.ppo_gae_lambda,
+        clip_coefficient=args.ppo_clip_coefficient,
+        value_clip_coefficient=args.ppo_value_clip_coefficient,
+        entropy_coefficient=args.ppo_entropy_coefficient,
+        value_loss_coefficient=args.ppo_value_loss_coefficient,
+        max_grad_norm=args.ppo_max_grad_norm,
+        target_kl=args.ppo_target_kl,
+        normalize_advantage=args.ppo_normalize_advantage,
+    )
+
+
 # 在训练开始前，打印一份“训练会在什么条件下停止”的概览
 def print_stop_overview(
     args: argparse.Namespace,
     train_config: TrainConfig,
 ) -> None:
     early_stop_enabled = args.early_stop
-    epsilon_floor_text = (
-        "dynamic (exponential decay)"
-        if train_config.epsilon_exp_decay
-        else str(train_config.epsilon_linear_episodes)
-    )
+    if args.algorithm == "dqn":
+        selection_start_text = (
+            "epsilon floor (dynamic)"
+            if train_config.epsilon_exp_decay
+            else f"epsilon floor ({train_config.epsilon_linear_episodes})"
+        )
+    else:
+        selection_start_text = f"episode {args.min_episodes}"
 
     print("")
     print("========== training stop overview ==========")
     print(f"max episodes without early stop : {train_config.episodes}")
-    print(f"best selection starts at        : epsilon floor ({epsilon_floor_text})")
+    print(f"algorithm                       : {args.algorithm}")
+    print(f"best selection starts at        : {selection_start_text}")
     print(
         "staged validation              : "
         f"{args.validation_episodes} quick / "
@@ -233,9 +298,7 @@ def print_stop_overview(
         print("earliest early stop episode     : disabled")
         print("actual stop condition           : run until max episodes")
     else:
-        print(
-            f"early stop eligibility         : epsilon at floor and episode >= {args.min_episodes}"
-        )
+        print(f"early stop eligibility         : episode >= {args.min_episodes}")
         if args.target_mean_score is None:
             print("target mean score stop          : disabled")
         else:
@@ -271,8 +334,7 @@ def format_train_report(
     mean_rewards: list[float],
     losses: list[float],
     mean_loss_100s: list[float],
-    epsilons: list[float],
-    replay_buffer_sizes: list[int],
+    algorithm_metrics: dict[str, list[float]],
 ) -> str:
     summaries = {
         "score": summarize_values(scores),
@@ -283,9 +345,12 @@ def format_train_report(
         "mean_reward_100": summarize_values(mean_rewards),
         "loss": summarize_values(losses),
         "mean_loss_100": summarize_values(mean_loss_100s),
-        "epsilon": summarize_values(epsilons),
-        "replay_buffer_size": summarize_values(replay_buffer_sizes),
     }
+    summaries.update(
+        (name, summarize_values(values))
+        for name, values in algorithm_metrics.items()
+        if values
+    )
     lines = [
         f"Run: `{run_name}`",
         f"Episodes: `{episodes}`",
@@ -307,11 +372,12 @@ def format_train_report(
 def main() -> None:
     args = parse_args()
     train_config, env_config = build_configs(args)
+    ppo_config = build_ppo_config(args)
     set_seed(train_config.seed, deterministic=args.deterministic)
 
     # 假设你在 2026 年 7 月 7 日 下午 3 点 30 分 45 秒 执行了这行代码
     # 最后生成的 run_name 字符串就会是"dqn_20260707_153045"
-    run_name = datetime.now().strftime("dqn_%Y%m%d_%H%M%S")
+    run_name = datetime.now().strftime(f"{args.algorithm}_%Y%m%d_%H%M%S")
     # 定义文件路径。命令行参数里的短横线 - 会自动转换成 Python 属性名里的下划线 _
     run_dir = args.runs_dir / run_name
     # checkpoint 也使用同一个 run_name 分目录保存，避免多次训练互相覆盖 best.pt/latest.pt。
@@ -350,42 +416,49 @@ def main() -> None:
         cost_rewards=not args.no_cost_rewards,
         reward_gamma=train_config.gamma,
     )
-    agent = DQNAgent(
-        # 状态维度
-        state_size=(
-            env.grid_state_shape if args.state_mode in ("grid", "hybrid") else env.state_size
-        ),
-        # 动作维度
-        action_size=env.action_size,
-        hidden_size=train_config.hidden_size,
-        learning_rate=train_config.learning_rate,
-        # 折扣率
-        gamma=train_config.gamma,
-        n_step=train_config.n_step,
-        # 经验池大小
-        replay_buffer_size=train_config.replay_buffer_size,
-        batch_size=train_config.batch_size,
-        # 初始epsilon值(Epsilon-Greedy)
-        epsilon_start=train_config.epsilon_start,
-        # epsilon值的下界
-        epsilon_end=train_config.epsilon_end,
-        # 是否采用指数衰减；默认采用线性衰减。
-        epsilon_exp_decay=train_config.epsilon_exp_decay,
-        # epsilon 的指数衰减系数；仅在指数衰减模式下使用。
-        epsilon_exp_factor=train_config.epsilon_exp_factor,
-        # 线性衰减到 epsilon_end 需要的 episode 数。
-        epsilon_linear_episodes=train_config.epsilon_linear_episodes,
-        # 隔多少步更新一次目标网络
-        # Q训练网络更新一次视为一步，当经验池满后，则等价于贪吃蛇走一步
-        target_update_interval=train_config.target_update_interval,
-        state_mode=args.state_mode,
-        # Hybrid 拼接的是完整 get_state()，因此辅助向量维度等于环境 state_size。
-        auxiliary_size=env.state_size,
-        cnn_channels=train_config.cnn_channels,
-        cnn_output_channels=train_config.cnn_output_channels,
-        cnn_dilations=train_config.cnn_dilations,
-        seed=train_config.seed,
+    state_size = (
+        env.grid_state_shape if args.state_mode in ("grid", "hybrid") else env.state_size
     )
+    common_agent_kwargs = {
+        "state_size": state_size,
+        "action_size": env.action_size,
+        "hidden_size": train_config.hidden_size,
+        "learning_rate": train_config.learning_rate,
+        "gamma": train_config.gamma,
+        "batch_size": train_config.batch_size,
+        "state_mode": args.state_mode,
+        "auxiliary_size": env.state_size,
+        "cnn_channels": train_config.cnn_channels,
+        "cnn_output_channels": train_config.cnn_output_channels,
+        "cnn_dilations": train_config.cnn_dilations,
+        "seed": train_config.seed,
+    }
+    if args.algorithm == "ppo":
+        agent = PPOAgent(
+            **common_agent_kwargs,
+            rollout_steps=ppo_config.rollout_steps,
+            update_epochs=ppo_config.update_epochs,
+            gae_lambda=ppo_config.gae_lambda,
+            clip_coefficient=ppo_config.clip_coefficient,
+            value_clip_coefficient=ppo_config.value_clip_coefficient,
+            entropy_coefficient=ppo_config.entropy_coefficient,
+            value_loss_coefficient=ppo_config.value_loss_coefficient,
+            max_grad_norm=ppo_config.max_grad_norm,
+            target_kl=ppo_config.target_kl,
+            normalize_advantage=ppo_config.normalize_advantage,
+        )
+    else:
+        agent = DQNAgent(
+            **common_agent_kwargs,
+            n_step=train_config.n_step,
+            replay_buffer_size=train_config.replay_buffer_size,
+            epsilon_start=train_config.epsilon_start,
+            epsilon_end=train_config.epsilon_end,
+            epsilon_exp_decay=train_config.epsilon_exp_decay,
+            epsilon_exp_factor=train_config.epsilon_exp_factor,
+            epsilon_linear_episodes=train_config.epsilon_linear_episodes,
+            target_update_interval=train_config.target_update_interval,
+        )
     validation_env = SnakeEnv(
         width=env_config.width,
         height=env_config.height,
@@ -407,9 +480,24 @@ def main() -> None:
         args.confirmation_episodes,
     )
 
+    resolved_training = asdict(train_config)
+    if args.algorithm == "ppo":
+        for dqn_only_field in (
+            "n_step",
+            "replay_buffer_size",
+            "epsilon_start",
+            "epsilon_end",
+            "epsilon_exp_decay",
+            "epsilon_exp_factor",
+            "epsilon_linear_episodes",
+            "target_update_interval",
+        ):
+            resolved_training.pop(dqn_only_field)
+
     # 同时写入 run/checkpoint 目录，并嵌入每个 checkpoint。以后不再依赖日志反推奖励。
     run_config = {
         "schema_version": 1,
+        "algorithm": args.algorithm,
         "run_name": run_name,
         "command_argv": [str(value) for value in sys.argv],
         "environment": {
@@ -421,7 +509,8 @@ def main() -> None:
             "starvation_enabled": env.starvation_enabled,
         },
         "reward": env.get_reward_settings(),
-        "training": asdict(train_config),
+        "training": resolved_training,
+        **({"ppo": asdict(ppo_config)} if args.algorithm == "ppo" else {}),
         "early_stop": {
             "enabled": args.early_stop,
             "min_episodes": args.min_episodes,
@@ -437,6 +526,11 @@ def main() -> None:
             "confirmation_seed_start": confirmation_seeds[0],
             "selection_thresholds": asdict(DEFAULT_SELECTION_THRESHOLDS),
             "starvation_enabled": False,
+            "selection_start_episode": (
+                args.min_episodes
+                if args.algorithm == "ppo"
+                else train_config.epsilon_linear_episodes
+            ),
         },
         "deterministic": args.deterministic,
     }
@@ -471,10 +565,18 @@ def main() -> None:
     mean_losses: list[float] = []
     # 每局结束时的 mean_loss_100 历史，用于生成 train/report。
     mean_loss_100s: list[float] = []
-    # 每局结束后的 epsilon 历史，用于生成 train/report。
-    epsilons: list[float] = []
-    # 每局结束时的经验池大小历史，用于生成 train/report。
-    replay_buffer_sizes: list[int] = []
+    algorithm_metric_histories: dict[str, list[float]] = (
+        {"epsilon": [], "replay_buffer_size": []}
+        if args.algorithm == "dqn"
+        else {
+            "policy_loss": [],
+            "value_loss": [],
+            "entropy": [],
+            "approx_kl": [],
+            "clip_fraction": [],
+            "explained_variance": [],
+        }
+    )
     # 历史单局最高分，仅用于终端输出观察。
     best_score = -1
     # 历史最高训练 mean_score_100 只用于观察，不再决定 best.pt。
@@ -489,8 +591,7 @@ def main() -> None:
         validation_csv_path.open("w", newline="", encoding="utf-8") as validation_file,
     ):
         metrics = csv.writer(file)
-        metrics.writerow(
-            [
+        common_metrics_header = [
                 "episode",
                 "score",
                 "score_per_step",
@@ -504,12 +605,30 @@ def main() -> None:
                 "terminal_reward",
                 "termination_reason",
                 "episode_steps",
+        ]
+        if args.algorithm == "dqn":
+            algorithm_metrics_header = [
                 "epsilon",
                 "loss",
                 "mean_loss_100",
                 "replay_buffer_size",
             ]
-        )
+        else:
+            algorithm_metrics_header = [
+                "loss",
+                "mean_loss_100",
+                "policy_loss",
+                "value_loss",
+                "entropy",
+                "approx_kl",
+                "clip_fraction",
+                "explained_variance",
+                "ppo_epochs",
+                "ppo_samples",
+                "ppo_update_steps",
+                "rollout_buffer_size",
+            ]
+        metrics.writerow(common_metrics_header + algorithm_metrics_header)
         validation_metrics = csv.writer(validation_file)
         validation_metrics.writerow(
             [
@@ -648,6 +767,7 @@ def main() -> None:
 
                 # 记录一个episode中所有步的loss
                 losses: list[float] = []
+                ppo_updates: list[PPOMetrics] = []
                 # 记录一个 episode 中所有 step 的 reward 总和，和 score 分开观察。
                 episode_reward = 0.0
                 reward_components = {
@@ -674,9 +794,12 @@ def main() -> None:
                     # 加入经验回放池
                     agent.remember(state, action, reward, next_state, done)
                     # 智能体更新Q值，如果经验回放池没达到batch_size则返回None
-                    loss = agent.learn()
-                    if loss is not None:
-                        losses.append(loss)
+                    update_result = agent.learn()
+                    if isinstance(update_result, PPOMetrics):
+                        ppo_updates.append(update_result)
+                        losses.append(update_result.loss)
+                    elif update_result is not None:
+                        losses.append(update_result)
                     state = next_state
 
                 # 自然终止时队列通常已在 remember() 中冲刷；若这里只是达到最大步数，
@@ -684,7 +807,8 @@ def main() -> None:
                 agent.finish_episode()
 
                 # 每个 episode 执行一次 epsilon 衰减；默认按最大训练局数的 50% 线性退火。
-                agent.decay_epsilon(episode)
+                if args.algorithm == "dqn":
+                    agent.decay_epsilon(episode)
                 # 从环境返回的额外信息info中提取游戏分数字段的值
                 score = int(info["score"])
                 # 记录游戏分数到列表中
@@ -701,16 +825,61 @@ def main() -> None:
                 # 吃食效率 = 吃到的食物数 / 存活步数，衡量策略是否直奔目标
                 score_per_step = score / episode_steps if episode_steps > 0 else 0.0
                 # 一个episode中产生的所有损失求平均。
-                mean_loss = sum(losses) / len(losses) if losses else 0.0
-                mean_losses.append(mean_loss)
-                mean_loss_100 = sum(mean_losses[-100:]) / min(len(mean_losses), 100)
+                episode_loss = sum(losses) / len(losses) if losses else None
+                if args.algorithm == "dqn":
+                    mean_loss = episode_loss if episode_loss is not None else 0.0
+                    mean_losses.append(mean_loss)
+                elif episode_loss is not None:
+                    mean_losses.append(episode_loss)
+                    mean_loss = episode_loss
+                else:
+                    mean_loss = 0.0
+                mean_loss_100 = (
+                    sum(mean_losses[-100:]) / min(len(mean_losses), 100)
+                    if mean_losses
+                    else 0.0
+                )
                 episode_steps_history.append(episode_steps)
                 score_per_steps.append(score_per_step)
                 mean_scores.append(mean_score)
-                losses_history.append(mean_loss)
-                mean_loss_100s.append(mean_loss_100)
-                epsilons.append(agent.epsilon)
-                replay_buffer_sizes.append(len(agent.replay_buffer))
+                if args.algorithm == "dqn" or episode_loss is not None:
+                    losses_history.append(mean_loss)
+                    mean_loss_100s.append(mean_loss_100)
+                if args.algorithm == "dqn":
+                    algorithm_metric_histories["epsilon"].append(agent.epsilon)
+                    algorithm_metric_histories["replay_buffer_size"].append(
+                        float(len(agent.replay_buffer))
+                    )
+                for update in ppo_updates:
+                    algorithm_metric_histories["policy_loss"].append(update.policy_loss)
+                    algorithm_metric_histories["value_loss"].append(update.value_loss)
+                    algorithm_metric_histories["entropy"].append(update.entropy)
+                    algorithm_metric_histories["approx_kl"].append(update.approx_kl)
+                    algorithm_metric_histories["clip_fraction"].append(update.clip_fraction)
+                    algorithm_metric_histories["explained_variance"].append(
+                        update.explained_variance
+                    )
+                ppo_episode_metrics: dict[str, float | int] = {}
+                if ppo_updates:
+                    ppo_episode_metrics = {
+                        "policy_loss": sum(item.policy_loss for item in ppo_updates)
+                        / len(ppo_updates),
+                        "value_loss": sum(item.value_loss for item in ppo_updates)
+                        / len(ppo_updates),
+                        "entropy": sum(item.entropy for item in ppo_updates) / len(ppo_updates),
+                        "approx_kl": sum(item.approx_kl for item in ppo_updates)
+                        / len(ppo_updates),
+                        "clip_fraction": sum(item.clip_fraction for item in ppo_updates)
+                        / len(ppo_updates),
+                        "explained_variance": sum(
+                            item.explained_variance for item in ppo_updates
+                        )
+                        / len(ppo_updates),
+                        "ppo_epochs": ppo_updates[-1].epochs,
+                        "ppo_samples": sum(item.samples for item in ppo_updates),
+                        "ppo_update_steps": agent.update_steps,
+                        "rollout_buffer_size": len(agent.rollout),
+                    }
 
                 # 存下得分最高时的参数
                 if score > best_score:
@@ -738,14 +907,17 @@ def main() -> None:
                         writer.add_scalar(f"train/reward_{component}", component_value, episode)
                     # 本局存活步数
                     writer.add_scalar("train/episode_steps", episode_steps, episode)
-                    # 当前探索率
-                    writer.add_scalar("train/epsilon", agent.epsilon, episode)
-                    # 本局平均loss
-                    writer.add_scalar("train/loss", mean_loss, episode)
-                    # 最近100局滑动平均loss
-                    writer.add_scalar("train/mean_loss_100", mean_loss_100, episode)
-                    # 经验回放池当前容量
-                    writer.add_scalar("train/replay_buffer_size", len(agent.replay_buffer), episode)
+                    if episode_loss is not None or args.algorithm == "dqn":
+                        writer.add_scalar("train/loss", mean_loss, episode)
+                        writer.add_scalar("train/mean_loss_100", mean_loss_100, episode)
+                    if args.algorithm == "dqn":
+                        writer.add_scalar("train/epsilon", agent.epsilon, episode)
+                        writer.add_scalar(
+                            "train/replay_buffer_size", len(agent.replay_buffer), episode
+                        )
+                    else:
+                        for metric_name, metric_value in ppo_episode_metrics.items():
+                            writer.add_scalar(f"train/{metric_name}", metric_value, episode)
 
                 if wandb_run is not None:
                     wandb_run.log(
@@ -758,13 +930,16 @@ def main() -> None:
                             episode_steps=episode_steps_history,
                             loss=mean_loss,
                             mean_loss_100=mean_loss_100,
-                            epsilon=agent.epsilon,
-                            replay_buffer_size=len(agent.replay_buffer),
+                            algorithm=args.algorithm,
+                            epsilon=(agent.epsilon if args.algorithm == "dqn" else None),
+                            replay_buffer_size=(
+                                len(agent.replay_buffer) if args.algorithm == "dqn" else None
+                            ),
+                            ppo_metrics=ppo_episode_metrics,
                         )
                     )
 
-                metrics.writerow(
-                    [
+                common_metrics_row = [
                         episode,
                         score,
                         f"{score_per_step:.6f}",
@@ -778,12 +953,35 @@ def main() -> None:
                         f"{reward_components['terminal']:.6f}",
                         str(info["termination_reason"]),
                         episode_steps,
+                ]
+                if args.algorithm == "dqn":
+                    algorithm_metrics_row = [
                         f"{agent.epsilon:.6f}",
                         mean_loss,
                         f"{mean_loss_100:.4f}",
                         len(agent.replay_buffer),
                     ]
-                )
+                else:
+                    algorithm_metrics_row = [
+                        "" if episode_loss is None else f"{mean_loss:.6f}",
+                        "" if episode_loss is None else f"{mean_loss_100:.6f}",
+                        *[
+                            ppo_episode_metrics.get(name, "")
+                            for name in (
+                                "policy_loss",
+                                "value_loss",
+                                "entropy",
+                                "approx_kl",
+                                "clip_fraction",
+                                "explained_variance",
+                                "ppo_epochs",
+                                "ppo_samples",
+                                "ppo_update_steps",
+                                "rollout_buffer_size",
+                            )
+                        ],
+                    ]
+                metrics.writerow(common_metrics_row + algorithm_metrics_row)
 
                 # 强制将内存缓冲区（Buffer）中的数据立刻写入到实际的硬盘文件中，防止数据丢失
                 file.flush()
@@ -793,8 +991,6 @@ def main() -> None:
 
                 decision = run_staged_validation(
                     episode=episode,
-                    epsilon=agent.epsilon,
-                    epsilon_end=agent.epsilon_end,
                     state=validation_state,
                     evaluator=lambda seed_set: run_validation(episode, seed_set),
                     interval=args.validation_interval,
@@ -802,6 +998,11 @@ def main() -> None:
                     min_episodes=args.min_episodes,
                     patience=args.validation_patience,
                     target_mean_score=args.target_mean_score,
+                    epsilon=(agent.epsilon if args.algorithm == "dqn" else None),
+                    epsilon_end=(agent.epsilon_end if args.algorithm == "dqn" else None),
+                    selection_ready=(
+                        episode >= args.min_episodes if args.algorithm == "ppo" else None
+                    ),
                 )
                 for event in decision.events:
                     record_validation(
@@ -840,11 +1041,15 @@ def main() -> None:
                     )
 
                 # 每个episode输出一次指标信息
+                algorithm_status = (
+                    f"epsilon={agent.epsilon:.3f} replay={len(agent.replay_buffer)}"
+                    if args.algorithm == "dqn"
+                    else f"updates={agent.update_steps} rollout={len(agent.rollout)}"
+                )
                 print(
                     f"episode={episode:4d} score={score:3d} steps={episode_steps:4d} "
-                    f"reward={episode_reward:6.1f} "
-                    f"mean100={mean_score:6.2f} epsilon={agent.epsilon:.3f} "
-                    f"loss={mean_loss:.4f} best_score={best_score}"
+                    f"reward={episode_reward:6.1f} mean100={mean_score:6.2f} "
+                    f"{algorithm_status} loss={mean_loss:.4f} best_score={best_score}"
                 )
 
                 if decision.stop_reason is not None:
@@ -872,8 +1077,7 @@ def main() -> None:
                                 mean_rewards=mean_rewards,
                                 losses=losses_history,
                                 mean_loss_100s=mean_loss_100s,
-                                epsilons=epsilons,
-                                replay_buffer_sizes=replay_buffer_sizes,
+                                algorithm_metrics=algorithm_metric_histories,
                             ),
                             global_step=len(scores),
                         )
@@ -895,7 +1099,7 @@ def main() -> None:
 
     if validation_state.best_training_episode is None:
         print(
-            "best_not_created=epsilon_did_not_reach_floor "
+            "best_not_created=selection_did_not_start "
             "latest.pt remains available; no fallback checkpoint was selected"
         )
 

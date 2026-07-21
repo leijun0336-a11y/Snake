@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from snake_ai.train import build_configs, parse_args
+from snake_ai.train import build_configs, build_ppo_config, parse_args
 
 
 def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -25,6 +25,33 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert train_config.n_step == 1
     assert train_config.learning_rate == pytest.approx(1e-4)
     assert args.learning_rate == pytest.approx(1e-4)
+    assert args.algorithm == "dqn"
+
+
+def test_ppo_config_uses_aligned_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--algorithm", "ppo"])
+
+    args = parse_args()
+    train_config, _ = build_configs(args)
+    ppo_config = build_ppo_config(args)
+
+    assert train_config.learning_rate == pytest.approx(1e-4)
+    assert train_config.batch_size == 128
+    assert ppo_config.rollout_steps == 2048
+    assert ppo_config.update_epochs == 4
+    assert ppo_config.gae_lambda == pytest.approx(0.95)
+    assert ppo_config.target_kl == pytest.approx(0.02)
+
+
+def test_ppo_rollout_must_be_divisible_by_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["train.py", "--algorithm", "ppo", "--ppo-rollout-steps", "1000"],
+    )
+
+    with pytest.raises(ValueError, match="divisible"):
+        build_configs(parse_args())
 
 
 def test_parse_args_enables_wandb_only_when_requested(

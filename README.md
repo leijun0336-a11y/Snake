@@ -1,6 +1,6 @@
 # Snake AI
 
-基于 Double DQN 与 Dueling DQN 的贪吃蛇强化学习项目。代码包含可渲染的游戏环境、Vector/Grid/Hybrid 三种状态输入、动态棋盘 CNN、经验回放、阶段验证、checkpoint 选拔、独立评估，以及 TensorBoard/W&B 日志。
+支持 Double/Dueling DQN 与 PPO 的贪吃蛇强化学习项目。代码包含可渲染的游戏环境、Vector/Grid/Hybrid 三种状态输入、动态棋盘 CNN、经验回放或 on-policy rollout、阶段验证、checkpoint 选拔、独立评估，以及 TensorBoard/W&B 日志。
 
 ## 🚀 快速启动游戏
 
@@ -49,6 +49,7 @@ uv run --extra cpu python -m snake_ai.evaluate --help
 src/snake_ai/
 ├── agents/
 │   ├── dqn_agent.py       # Double DQN、epsilon-greedy、checkpoint
+│   ├── ppo_agent.py       # PPO、GAE、Actor-Critic、checkpoint
 │   └── replay_buffer.py   # 固定容量经验回放
 ├── game/
 │   ├── snake_env.py       # 环境、状态编码、奖励与终止规则
@@ -113,6 +114,40 @@ AI checkpoint 会在主菜单首帧显示后于后台预加载；首次点击 AI
 
 ```bash
 uv run --extra cu124 python -m snake_ai.train
+```
+
+切换为 PPO 时，环境、状态、奖励、网络宽度、验证和早停配置继续使用同一组公共参数；run 名称自动改为 `ppo_YYYYMMDD_HHMMSS`：
+
+```bash
+uv run --extra cu124 python -m snake_ai.train --algorithm ppo
+```
+
+PPO 默认使用 `2048` 步 rollout、`128` minibatch、`4` 个 update epochs、`GAE λ=0.95`、`clip=0.2`、`entropy coefficient=0.01` 和 `target KL=0.02`。公共 `--learning-rate` 默认仍为 `1e-4`。PPO 不使用 replay buffer、epsilon、target network 或 n-step。
+
+按最新一次 10×10 实验配置运行 PPO（仅替换算法和算法专属参数，学习率采用当前公共默认值）：
+
+```bash
+bash scripts/train_autodl.sh \
+  --algorithm ppo \
+  --width 10 --height 10 \
+  --state-mode hybrid \
+  --reward-profile experiment8 --potential-reward \
+  --max-episodes 40000 \
+  --batch-size 128 --gamma 0.99 --learning-rate 0.0001 \
+  --hidden-size 256 \
+  --cnn-channels 32 --cnn-output-channels 8 \
+  --cnn-dilations 1 1 2 \
+  --ppo-rollout-steps 2048 --ppo-update-epochs 4 \
+  --ppo-gae-lambda 0.95 --ppo-clip-coefficient 0.2 \
+  --ppo-value-clip-coefficient 0.2 \
+  --ppo-entropy-coefficient 0.01 \
+  --ppo-value-loss-coefficient 0.5 \
+  --ppo-max-grad-norm 0.5 --ppo-target-kl 0.02 \
+  --early-stop --min-episodes 15000 \
+  --validation-interval 1000 \
+  --validation-episodes 100 --confirmation-episodes 500 \
+  --validation-patience 8 --validation-max-steps 2000 \
+  --seed 42 --wandb
 ```
 
 默认 `--n-step 1` 使用传统 one-step TD target。要聚合未来 3 步真实奖励：
@@ -299,6 +334,14 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 - 每隔 `target_update_interval` 次学习更新，把 `policy_net` 参数复制到 `target_net`。
 - Epsilon 默认线性衰减；传入 `--epsilon-exp-decay` 后改为每局乘以 `--epsilon-exp-factor`。
 
+### PPO 学习流程
+
+- Actor-Critic 复用 Dueling DQN 完全相同的 Vector/Grid/Hybrid 特征编码和等形双分支；Actor 输出三个离散动作的 logits，Critic 输出状态价值。
+- 训练动作从 `Categorical` 策略采样，验证和评估固定使用最大 logits 动作。
+- rollout 满 `--ppo-rollout-steps` 后，使用 GAE、clipped policy objective、clipped value loss、entropy bonus 和 advantage normalization 更新。
+- 真实终止不 bootstrap；训练步数截断会 bootstrap Critic，但 GAE 不跨 reset 传播。
+- 环境 reward 不做 clipping 或 normalization，保持与 DQN 实验相同的奖励语义。
+
 ### 奖励配置
 
 | 配置 | `reference` | `experiment8` |
@@ -346,7 +389,7 @@ uv run --extra cu124 python -m snake_ai.train --max-steps-per-episode 1000
 
 ```text
 checkpoints/<run_name>/latest.pt
-checkpoints/<run_name>/best.pt          # epsilon 到达下限并完成首次阶段验证后才出现
+checkpoints/<run_name>/best.pt          # 达到算法对应的选拔起点并完成首次阶段验证后出现
 checkpoints/<run_name>/config.json
 runs/<run_name>/config.json
 runs/<run_name>/train_metrics.csv
@@ -366,7 +409,7 @@ runs/<run_name>/events...train
 
 ## 评估
 
-默认加载最新训练目录的 `latest.pt`，评估 1000 局、每局最多执行 1000 步，并打开 pygame：
+默认在 `dqn_*` 和 `ppo_*` 中加载时间戳最新实验的 `latest.pt`，再根据 checkpoint 的 `algorithm` 自动创建对应 agent。评估默认运行 1000 局、每局最多执行 1000 步，并打开 pygame：
 
 ```bash
 uv run --extra cpu python -m snake_ai.evaluate
@@ -390,9 +433,9 @@ uv run --extra cpu python -m snake_ai.evaluate \
 uv run --extra cpu python -m snake_ai.evaluate --no-render --tensorboard
 ```
 
-评估会从 checkpoint 自动读取 `state_mode`，但棋盘 `--width/--height` 仍由命令行决定，必须与 checkpoint 的 `state_size` 一致。
+评估会从 checkpoint 自动读取算法、`state_mode` 和完整 `run_config` 中的棋盘尺寸；显式传入 `--width/--height` 时可覆盖尺寸，但必须与 checkpoint 的 `state_size` 一致。缺少 `algorithm` 的历史 checkpoint 按 DQN 处理。
 
-当前代码只加载 `architecture_version=3` 的 checkpoint，并要求架构元数据完整；不会猜测缺失字段或回退到历史网络。旧 checkpoint 仍可作为实验档案保留，需要评估时应使用与其匹配的历史 Git 版本。
+DQN checkpoint 使用 `architecture_version=3`，PPO checkpoint 使用独立的 `architecture_version=1`；两者都要求架构元数据完整，不会猜测缺失字段或回退到历史网络。旧 checkpoint 仍可作为实验档案保留，需要评估时应使用与其匹配的历史 Git 版本。
 
 ## 日志、TensorBoard 与 W&B
 
@@ -400,7 +443,8 @@ uv run --extra cpu python -m snake_ai.evaluate --no-render --tensorboard
 
 - 得分、近 100 局平均分、吃食效率和 episode 步数；
 - episode 总奖励及 food/progress/step/hunger/terminal 奖励分量；
-- epsilon、Huber loss、近 100 局平均 loss 和 replay buffer 大小；
+- DQN 记录 epsilon、Huber loss、近 100 局平均 loss和 replay buffer 大小；
+- PPO 记录总损失、policy/value loss、entropy、approx KL、clip fraction 和 explained variance；
 - quick/confirmation 验证均分、满盘率、超时率及 best 晋升结果。
 
 评估记录逐局得分、步数、吃食效率、最大蛇长和超时状态，并输出总体均值、标准差、满盘率与超时率。
@@ -411,7 +455,9 @@ uv run tensorboard --logdir runs
 
 浏览器打开 `http://localhost:6006`。同一 run 中 `.train` 和 `.eval` event 可以同时存在，分别使用 `train/*`、`validation/*` 与 `eval/*` tag。
 
-`--wandb` 的六个面板按参考图固定为：
+`--wandb` 的公共前三个面板为 Score、Reward 和 Episode Steps。DQN 的后三个面板保持为 Loss、Epsilon 和 Replay Buffer Size；PPO 的后三个面板为 PPO Losses、Entropy 和 PPO Diagnostics（KL、clip fraction、explained variance）。
+
+DQN 布局：
 
 | 行 | 左 | 右 |
 |---|---|---|
