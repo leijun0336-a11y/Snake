@@ -20,8 +20,8 @@ def test_build_configs_resolves_evaluation_defaults(
     train_config, env_config = build_configs(parse_args())
 
     assert train_config.seed == 42
-    assert env_config.width == 20
-    assert env_config.height == 20
+    assert env_config.width == 6
+    assert env_config.height == 6
 
 
 def test_build_configs_reads_board_size_from_checkpoint(

@@ -111,8 +111,8 @@ def get_reward_config(name: str) -> RewardConfig:
 
 @dataclass(frozen=True)
 class EnvConfig:
-    width: int = 20
-    height: int = 20
+    width: int = 6
+    height: int = 6
     cell_size: int = 48
     fps: int = 20
 

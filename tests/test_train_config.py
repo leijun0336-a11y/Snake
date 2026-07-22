@@ -17,8 +17,8 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert train_config.max_steps_per_episode is None
     assert train_config.epsilon_linear_episodes == 7500
-    assert env_config.width == 20
-    assert env_config.height == 20
+    assert env_config.width == 6
+    assert env_config.height == 6
     args = parse_args()
     assert args.validation_interval == 500
     assert args.validation_episodes == 100
