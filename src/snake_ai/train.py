@@ -122,6 +122,17 @@ def parse_args() -> argparse.Namespace:
         "--ppo-entropy-coefficient", type=float, default=PPOConfig.entropy_coefficient
     )
     parser.add_argument(
+        "--ppo-entropy-coefficient-end",
+        type=float,
+        default=PPOConfig.entropy_coefficient_end,
+    )
+    parser.add_argument(
+        "--ppo-entropy-anneal-episodes",
+        type=int,
+        default=PPOConfig.entropy_anneal_episodes,
+        metavar="N",
+    )
+    parser.add_argument(
         "--ppo-value-loss-coefficient",
         type=float,
         default=PPOConfig.value_loss_coefficient,
@@ -137,6 +148,11 @@ def parse_args() -> argparse.Namespace:
         "--ppo-normalize-returns",
         action=argparse.BooleanOptionalAction,
         default=PPOConfig.normalize_returns,
+    )
+    parser.add_argument(
+        "--argmax-cycle-fallback",
+        action="store_true",
+        help="use second/third-ranked actions when deterministic evaluation repeats a state",
     )
     # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
     parser.add_argument("--early-stop", action="store_true")
@@ -224,7 +240,11 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
             raise ValueError("ppo_gae_lambda must be between 0 and 1")
         if args.ppo_clip_coefficient <= 0.0 or args.ppo_value_clip_coefficient <= 0.0:
             raise ValueError("PPO clip coefficients must be positive")
-        if args.ppo_entropy_coefficient < 0.0 or args.ppo_value_loss_coefficient < 0.0:
+        if not 0.0 <= args.ppo_entropy_coefficient_end <= args.ppo_entropy_coefficient:
+            raise ValueError("PPO entropy coefficients must satisfy 0 <= end <= start")
+        if args.ppo_entropy_anneal_episodes is not None and args.ppo_entropy_anneal_episodes < 1:
+            raise ValueError("ppo_entropy_anneal_episodes must be at least 1")
+        if args.ppo_value_loss_coefficient < 0.0:
             raise ValueError("PPO loss coefficients must be non-negative")
         if args.ppo_max_grad_norm <= 0.0:
             raise ValueError("ppo_max_grad_norm must be positive")
@@ -268,6 +288,12 @@ def build_ppo_config(args: argparse.Namespace) -> PPOConfig:
         clip_coefficient=args.ppo_clip_coefficient,
         value_clip_coefficient=args.ppo_value_clip_coefficient,
         entropy_coefficient=args.ppo_entropy_coefficient,
+        entropy_coefficient_end=args.ppo_entropy_coefficient_end,
+        entropy_anneal_episodes=(
+            args.max_episodes
+            if args.ppo_entropy_anneal_episodes is None
+            else args.ppo_entropy_anneal_episodes
+        ),
         value_loss_coefficient=args.ppo_value_loss_coefficient,
         max_grad_norm=args.ppo_max_grad_norm,
         target_kl=args.ppo_target_kl,
@@ -356,9 +382,7 @@ def format_train_report(
         "mean_loss_100": summarize_values(mean_loss_100s),
     }
     summaries.update(
-        (name, summarize_values(values))
-        for name, values in algorithm_metrics.items()
-        if values
+        (name, summarize_values(values)) for name, values in algorithm_metrics.items() if values
     )
     lines = [
         f"Run: `{run_name}`",
@@ -447,9 +471,7 @@ def main() -> None:
         cost_rewards=not args.no_cost_rewards,
         reward_gamma=train_config.gamma,
     )
-    state_size = (
-        env.grid_state_shape if args.state_mode in ("grid", "hybrid") else env.state_size
-    )
+    state_size = env.grid_state_shape if args.state_mode in ("grid", "hybrid") else env.state_size
     common_agent_kwargs = {
         "state_size": state_size,
         "action_size": env.action_size,
@@ -473,6 +495,9 @@ def main() -> None:
             clip_coefficient=ppo_config.clip_coefficient,
             value_clip_coefficient=ppo_config.value_clip_coefficient,
             entropy_coefficient=ppo_config.entropy_coefficient,
+            entropy_coefficient_end=ppo_config.entropy_coefficient_end,
+            entropy_anneal_episodes=ppo_config.entropy_anneal_episodes,
+            argmax_cycle_fallback=args.argmax_cycle_fallback,
             value_loss_coefficient=ppo_config.value_loss_coefficient,
             max_grad_norm=ppo_config.max_grad_norm,
             target_kl=ppo_config.target_kl,
@@ -558,6 +583,7 @@ def main() -> None:
             "confirmation_seed_start": confirmation_seeds[0],
             "selection_thresholds": asdict(DEFAULT_SELECTION_THRESHOLDS),
             "starvation_enabled": False,
+            "argmax_cycle_fallback": args.argmax_cycle_fallback,
             "selection_start_episode": (
                 args.min_episodes
                 if args.algorithm == "ppo"
@@ -608,6 +634,7 @@ def main() -> None:
             "policy_loss": [],
             "value_loss": [],
             "entropy": [],
+            "entropy_coefficient": [],
             "approx_kl": [],
             "clip_fraction": [],
             "explained_variance": [],
@@ -628,19 +655,19 @@ def main() -> None:
     ):
         metrics = csv.writer(file)
         common_metrics_header = [
-                "episode",
-                "score",
-                "score_per_step",
-                "mean_score_100",
-                "episode_reward",
-                "mean_reward_100",
-                "food_reward",
-                "progress_reward",
-                "step_penalty",
-                "hunger_penalty",
-                "terminal_reward",
-                "termination_reason",
-                "episode_steps",
+            "episode",
+            "score",
+            "score_per_step",
+            "mean_score_100",
+            "episode_reward",
+            "mean_reward_100",
+            "food_reward",
+            "progress_reward",
+            "step_penalty",
+            "hunger_penalty",
+            "terminal_reward",
+            "termination_reason",
+            "episode_steps",
         ]
         if args.algorithm == "dqn":
             algorithm_metrics_header = [
@@ -656,6 +683,7 @@ def main() -> None:
                 "policy_loss",
                 "value_loss",
                 "entropy",
+                "entropy_coefficient",
                 "approx_kl",
                 "clip_fraction",
                 "explained_variance",
@@ -802,6 +830,8 @@ def main() -> None:
             train_start_time = time.perf_counter()
 
             for episode in range(1, train_config.episodes + 1):
+                if args.algorithm == "ppo":
+                    agent.set_entropy_for_episode(episode)
                 state = env.reset()
                 done = False
 
@@ -875,9 +905,7 @@ def main() -> None:
                 else:
                     mean_loss = 0.0
                 mean_loss_100 = (
-                    sum(mean_losses[-100:]) / min(len(mean_losses), 100)
-                    if mean_losses
-                    else 0.0
+                    sum(mean_losses[-100:]) / min(len(mean_losses), 100) if mean_losses else 0.0
                 )
                 episode_steps_history.append(episode_steps)
                 score_per_steps.append(score_per_step)
@@ -890,6 +918,10 @@ def main() -> None:
                     algorithm_metric_histories["replay_buffer_size"].append(
                         float(len(agent.replay_buffer))
                     )
+                else:
+                    algorithm_metric_histories["entropy_coefficient"].append(
+                        agent.entropy_coefficient
+                    )
                 for update in ppo_updates:
                     algorithm_metric_histories["policy_loss"].append(update.policy_loss)
                     algorithm_metric_histories["value_loss"].append(update.value_loss)
@@ -899,27 +931,33 @@ def main() -> None:
                     algorithm_metric_histories["explained_variance"].append(
                         update.explained_variance
                     )
-                ppo_episode_metrics: dict[str, float | int] = {}
+                ppo_episode_metrics: dict[str, float | int] = (
+                    {"entropy_coefficient": agent.entropy_coefficient}
+                    if args.algorithm == "ppo"
+                    else {}
+                )
                 if ppo_updates:
-                    ppo_episode_metrics = {
-                        "policy_loss": sum(item.policy_loss for item in ppo_updates)
-                        / len(ppo_updates),
-                        "value_loss": sum(item.value_loss for item in ppo_updates)
-                        / len(ppo_updates),
-                        "entropy": sum(item.entropy for item in ppo_updates) / len(ppo_updates),
-                        "approx_kl": sum(item.approx_kl for item in ppo_updates)
-                        / len(ppo_updates),
-                        "clip_fraction": sum(item.clip_fraction for item in ppo_updates)
-                        / len(ppo_updates),
-                        "explained_variance": sum(
-                            item.explained_variance for item in ppo_updates
-                        )
-                        / len(ppo_updates),
-                        "ppo_epochs": ppo_updates[-1].epochs,
-                        "ppo_samples": sum(item.samples for item in ppo_updates),
-                        "ppo_update_steps": agent.update_steps,
-                        "rollout_buffer_size": len(agent.rollout),
-                    }
+                    ppo_episode_metrics.update(
+                        {
+                            "policy_loss": sum(item.policy_loss for item in ppo_updates)
+                            / len(ppo_updates),
+                            "value_loss": sum(item.value_loss for item in ppo_updates)
+                            / len(ppo_updates),
+                            "entropy": sum(item.entropy for item in ppo_updates) / len(ppo_updates),
+                            "approx_kl": sum(item.approx_kl for item in ppo_updates)
+                            / len(ppo_updates),
+                            "clip_fraction": sum(item.clip_fraction for item in ppo_updates)
+                            / len(ppo_updates),
+                            "explained_variance": sum(
+                                item.explained_variance for item in ppo_updates
+                            )
+                            / len(ppo_updates),
+                            "ppo_epochs": ppo_updates[-1].epochs,
+                            "ppo_samples": sum(item.samples for item in ppo_updates),
+                            "ppo_update_steps": agent.update_steps,
+                            "rollout_buffer_size": len(agent.rollout),
+                        }
+                    )
 
                 # 存下得分最高时的参数
                 if score > best_score:
@@ -980,19 +1018,19 @@ def main() -> None:
                     )
 
                 common_metrics_row = [
-                        episode,
-                        score,
-                        f"{score_per_step:.6f}",
-                        f"{mean_score:.4f}",
-                        f"{episode_reward:.4f}",
-                        f"{mean_reward:.4f}",
-                        f"{reward_components['food']:.6f}",
-                        f"{reward_components['progress']:.6f}",
-                        f"{reward_components['step']:.6f}",
-                        f"{reward_components['hunger']:.6f}",
-                        f"{reward_components['terminal']:.6f}",
-                        str(info["termination_reason"]),
-                        episode_steps,
+                    episode,
+                    score,
+                    f"{score_per_step:.6f}",
+                    f"{mean_score:.4f}",
+                    f"{episode_reward:.4f}",
+                    f"{mean_reward:.4f}",
+                    f"{reward_components['food']:.6f}",
+                    f"{reward_components['progress']:.6f}",
+                    f"{reward_components['step']:.6f}",
+                    f"{reward_components['hunger']:.6f}",
+                    f"{reward_components['terminal']:.6f}",
+                    str(info["termination_reason"]),
+                    episode_steps,
                 ]
                 if args.algorithm == "dqn":
                     algorithm_metrics_row = [
@@ -1011,6 +1049,7 @@ def main() -> None:
                                 "policy_loss",
                                 "value_loss",
                                 "entropy",
+                                "entropy_coefficient",
                                 "approx_kl",
                                 "clip_fraction",
                                 "explained_variance",
@@ -1084,7 +1123,10 @@ def main() -> None:
                 algorithm_status = (
                     f"epsilon={agent.epsilon:.3f} replay={len(agent.replay_buffer)}"
                     if args.algorithm == "dqn"
-                    else f"updates={agent.update_steps} rollout={len(agent.rollout)}"
+                    else (
+                        f"updates={agent.update_steps} rollout={len(agent.rollout)} "
+                        f"entropy_coef={agent.entropy_coefficient:.5f}"
+                    )
                 )
                 print(
                     f"episode={episode:4d} score={score:3d} steps={episode_steps:4d} "

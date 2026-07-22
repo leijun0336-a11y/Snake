@@ -28,10 +28,14 @@ from snake_ai.validation import (
 class StraightAgent:
     def __init__(self) -> None:
         self.policy_net = torch.nn.Linear(1, 1)
+        self.reset_calls = 0
 
     def act(self, state: object, training: bool = False) -> int:
         assert training is False
         return 0
+
+    def reset_evaluation_state(self) -> None:
+        self.reset_calls += 1
 
 
 def make_result(
@@ -128,14 +132,9 @@ def test_six_by_six_quick_selection_exactly_matches_legacy_logic(
     thresholds = DEFAULT_SELECTION_THRESHOLDS
     legacy_mean_delta = candidate.mean_score - incumbent.mean_score
     legacy_full_rate_delta = candidate.full_rate - incumbent.full_rate
-    legacy_result = (
-        legacy_mean_delta + COMPARISON_EPSILON >= thresholds.quick_mean_delta
-        or (
-            legacy_mean_delta + COMPARISON_EPSILON
-            >= -thresholds.quick_mean_tolerance
-            and legacy_full_rate_delta + COMPARISON_EPSILON
-            >= thresholds.quick_full_rate_delta
-        )
+    legacy_result = legacy_mean_delta + COMPARISON_EPSILON >= thresholds.quick_mean_delta or (
+        legacy_mean_delta + COMPARISON_EPSILON >= -thresholds.quick_mean_tolerance
+        and legacy_full_rate_delta + COMPARISON_EPSILON >= thresholds.quick_full_rate_delta
     )
 
     assert passes_quick_screen(candidate, incumbent) is legacy_result
@@ -171,11 +170,9 @@ def test_six_by_six_confirmation_selection_exactly_matches_legacy_logic(
     legacy_mean_delta = candidate.mean_score - incumbent.mean_score
     legacy_full_rate_delta = candidate.full_rate - incumbent.full_rate
     legacy_result = (
-        legacy_mean_delta + COMPARISON_EPSILON
-        >= thresholds.confirmation_mean_delta
+        legacy_mean_delta + COMPARISON_EPSILON >= thresholds.confirmation_mean_delta
         or (
-            abs(legacy_mean_delta)
-            <= thresholds.confirmation_mean_tolerance + COMPARISON_EPSILON
+            abs(legacy_mean_delta) <= thresholds.confirmation_mean_tolerance + COMPARISON_EPSILON
             and legacy_full_rate_delta + COMPARISON_EPSILON
             >= thresholds.confirmation_full_rate_delta
         )
@@ -282,20 +279,14 @@ def test_six_by_six_selection_matches_legacy_over_dense_boundary_grid(
             legacy_mean_delta = candidate.mean_score - incumbent.mean_score
             legacy_rate_delta = candidate.full_rate - incumbent.full_rate
             if selector is passes_quick_screen:
-                expected = (
-                    legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold
-                    or (
-                        legacy_mean_delta + COMPARISON_EPSILON >= -mean_tolerance
-                        and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
-                    )
+                expected = legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold or (
+                    legacy_mean_delta + COMPARISON_EPSILON >= -mean_tolerance
+                    and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
                 )
             else:
-                expected = (
-                    legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold
-                    or (
-                        abs(legacy_mean_delta) <= mean_tolerance + COMPARISON_EPSILON
-                        and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
-                    )
+                expected = legacy_mean_delta + COMPARISON_EPSILON >= mean_threshold or (
+                    abs(legacy_mean_delta) <= mean_tolerance + COMPARISON_EPSILON
+                    and legacy_rate_delta + COMPARISON_EPSILON >= rate_threshold
                 )
 
             assert selector(candidate, incumbent) is expected
@@ -443,9 +434,7 @@ def test_staged_validation_initializes_only_at_epsilon_floor() -> None:
 
 def test_staged_validation_can_use_algorithm_neutral_selection_gate() -> None:
     quick = make_result("quick", episodes=100, mean_score=1.0, full_rate=0.0)
-    confirmation = make_result(
-        "confirmation", episodes=500, mean_score=1.0, full_rate=0.0
-    )
+    confirmation = make_result("confirmation", episodes=500, mean_score=1.0, full_rate=0.0)
     state = StagedValidationState()
 
     decision = run_staged_validation(
@@ -609,6 +598,7 @@ def test_evaluate_policy_reseeds_each_episode_and_restores_model_mode() -> None:
     assert result.timeout_games == 2
     assert result.full_score == 33
     assert agent.policy_net.training is True
+    assert agent.reset_calls == 2
     env.close()
 
 

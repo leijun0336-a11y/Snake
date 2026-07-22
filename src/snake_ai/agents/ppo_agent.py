@@ -15,7 +15,6 @@ from snake_ai.models.q_network import QNetwork
 # 继承QNetwork类作为ActorCriticNetwork，
 # Value 分支给Critic，Advantage 分支给 Actor，外形复用但出入参含义不同
 class ActorCriticNetwork(QNetwork):
-
     def __init__(
         self,
         input_size: int | tuple[int, int, int],
@@ -75,7 +74,6 @@ class PPOMetrics:
 
 
 class PPOAgent:
-
     ALGORITHM = "ppo"
     ARCHITECTURE_VERSION = 1
 
@@ -92,7 +90,10 @@ class PPOAgent:
         gae_lambda: float = 0.95,
         clip_coefficient: float = 0.2,
         value_clip_coefficient: float = 0.2,
-        entropy_coefficient: float = 0.01,
+        entropy_coefficient: float = 0.05,
+        entropy_coefficient_end: float = 0.001,
+        entropy_anneal_episodes: int = 15_000,
+        argmax_cycle_fallback: bool = False,
         value_loss_coefficient: float = 0.5,
         max_grad_norm: float = 0.5,
         target_kl: float | None = 0.02,
@@ -120,7 +121,11 @@ class PPOAgent:
             raise ValueError("gae_lambda must be between 0 and 1")
         if clip_coefficient <= 0.0 or value_clip_coefficient <= 0.0:
             raise ValueError("PPO clip coefficients must be positive")
-        if entropy_coefficient < 0.0 or value_loss_coefficient < 0.0:
+        if not 0.0 <= entropy_coefficient_end <= entropy_coefficient:
+            raise ValueError("entropy coefficients must satisfy 0 <= end <= start")
+        if entropy_anneal_episodes < 1:
+            raise ValueError("entropy_anneal_episodes must be at least 1")
+        if value_loss_coefficient < 0.0:
             raise ValueError("loss coefficients must be non-negative")
         if max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm must be positive")
@@ -138,7 +143,11 @@ class PPOAgent:
         self.gae_lambda = gae_lambda
         self.clip_coefficient = clip_coefficient
         self.value_clip_coefficient = value_clip_coefficient
+        self.entropy_coefficient_start = entropy_coefficient
+        self.entropy_coefficient_end = entropy_coefficient_end
+        self.entropy_anneal_episodes = entropy_anneal_episodes
         self.entropy_coefficient = entropy_coefficient
+        self.argmax_cycle_fallback = argmax_cycle_fallback
         self.value_loss_coefficient = value_loss_coefficient
         self.max_grad_norm = max_grad_norm
         self.target_kl = target_kl
@@ -156,6 +165,7 @@ class PPOAgent:
         self.policy_net = self._build_network()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
         self.rollout: list[RolloutTransition] = []
+        self._evaluation_state_visits: dict[bytes, int] = {}
 
     def _build_network(self) -> ActorCriticNetwork:
         return ActorCriticNetwork(
@@ -174,7 +184,42 @@ class PPOAgent:
             logits, _ = self.policy_net(self._state_batch_to_tensor([state]))
             if training:
                 return int(Categorical(logits=logits).sample().item())
-            return int(logits.argmax(dim=1).item())
+            if not self.argmax_cycle_fallback or self.action_size < 2:
+                return int(logits.argmax(dim=1).item())
+            ranked_actions = logits.argsort(dim=1, descending=True)[0]
+
+            state_key = self._evaluation_state_key(state)
+            previous_visits = self._evaluation_state_visits.get(state_key, 0)
+            self._evaluation_state_visits[state_key] = previous_visits + 1
+            if previous_visits == 0:
+                return int(ranked_actions[0].item())
+
+            fallback_rank = 1 + (previous_visits - 1) % (self.action_size - 1)
+            return int(ranked_actions[fallback_rank].item())
+
+    def set_entropy_for_episode(self, episode: int) -> float:
+        """Linearly anneal entropy from the first to the configured final episode."""
+
+        if episode < 1:
+            raise ValueError("episode must be at least 1")
+        if self.entropy_anneal_episodes == 1:
+            progress = 1.0
+        else:
+            progress = min(
+                (episode - 1) / (self.entropy_anneal_episodes - 1),
+                1.0,
+            )
+        self.entropy_coefficient = self.entropy_coefficient_start + progress * (
+            self.entropy_coefficient_end - self.entropy_coefficient_start
+        )
+        return self.entropy_coefficient
+
+    def reset_evaluation_state(self) -> None:
+        self._evaluation_state_visits.clear()
+
+    def _evaluation_state_key(self, state: Any) -> bytes:
+        parts = state if self.state_mode == "hybrid" else (state,)
+        return b"".join(np.ascontiguousarray(part, dtype=np.float32).tobytes() for part in parts)
 
     def remember(
         self,
@@ -271,23 +316,17 @@ class PPOAgent:
                     1.0 - self.clip_coefficient,
                     1.0 + self.clip_coefficient,
                 )
-                policy_loss = torch.maximum(
-                    unclipped_policy_loss, clipped_policy_loss
-                ).mean()
+                policy_loss = torch.maximum(unclipped_policy_loss, clipped_policy_loss).mean()
 
                 old_minibatch_values = old_values[minibatch_indices]
                 minibatch_returns = returns_tensor[minibatch_indices]
                 unclipped_value_loss = (new_values - minibatch_returns).pow(2)
-                clipped_values = old_minibatch_values + (
-                    new_values - old_minibatch_values
-                ).clamp(
+                clipped_values = old_minibatch_values + (new_values - old_minibatch_values).clamp(
                     -self.value_clip_coefficient,
                     self.value_clip_coefficient,
                 )
                 clipped_value_loss = (clipped_values - minibatch_returns).pow(2)
-                value_loss = 0.5 * torch.maximum(
-                    unclipped_value_loss, clipped_value_loss
-                ).mean()
+                value_loss = 0.5 * torch.maximum(unclipped_value_loss, clipped_value_loss).mean()
                 loss = (
                     policy_loss
                     + self.value_loss_coefficient * value_loss
@@ -301,9 +340,7 @@ class PPOAgent:
 
                 with torch.no_grad():
                     approx_kl = ((ratio - 1.0) - log_ratio).mean()
-                    clip_fraction = (
-                        (ratio - 1.0).abs() > self.clip_coefficient
-                    ).float().mean()
+                    clip_fraction = ((ratio - 1.0).abs() > self.clip_coefficient).float().mean()
                 values = {
                     "loss": loss,
                     "policy_loss": policy_loss,
@@ -346,9 +383,7 @@ class PPOAgent:
             samples=len(batch),
         )
 
-    def _calculate_gae(
-        self, batch: list[RolloutTransition]
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def _calculate_gae(self, batch: list[RolloutTransition]) -> tuple[np.ndarray, np.ndarray]:
         advantages = np.zeros(len(batch), dtype=np.float32)
         gae = 0.0
         for index in range(len(batch) - 1, -1, -1):
@@ -420,6 +455,9 @@ class PPOAgent:
             "clip_coefficient": self.clip_coefficient,
             "value_clip_coefficient": self.value_clip_coefficient,
             "entropy_coefficient": self.entropy_coefficient,
+            "entropy_coefficient_start": self.entropy_coefficient_start,
+            "entropy_coefficient_end": self.entropy_coefficient_end,
+            "entropy_anneal_episodes": self.entropy_anneal_episodes,
             "value_loss_coefficient": self.value_loss_coefficient,
             "max_grad_norm": self.max_grad_norm,
             "target_kl": self.target_kl,
@@ -453,7 +491,9 @@ class PPOAgent:
         }
         missing = required.difference(checkpoint)
         if missing:
-            raise ValueError(f"PPO checkpoint is missing required fields: {', '.join(sorted(missing))}")
+            raise ValueError(
+                f"PPO checkpoint is missing required fields: {', '.join(sorted(missing))}"
+            )
         if checkpoint["state_size"] != self.state_size:
             raise ValueError(
                 f"Checkpoint state_size={checkpoint['state_size']} does not match "

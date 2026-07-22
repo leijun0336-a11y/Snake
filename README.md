@@ -116,13 +116,13 @@ AI checkpoint 会在主菜单首帧显示后于后台预加载；首次点击 AI
 uv run --extra cu124 python -m snake_ai.train
 ```
 
-切换为 PPO 时，环境、状态、奖励、网络宽度、验证和早停配置继续使用同一组公共参数；run 名称自动改为 `ppo_YYYYMMDD_HHMMSS`：
+切换为 PPO 并使用 PPO 专用奖励时，状态、网络宽度、验证和早停配置继续使用同一组公共参数；run 名称自动改为 `ppo_YYYYMMDD_HHMMSS`：
 
 ```bash
-uv run --extra cu124 python -m snake_ai.train --algorithm ppo
+uv run --extra cu124 python -m snake_ai.train --algorithm ppo --reward-profile experiment_ppo
 ```
 
-PPO 默认使用 `2048` 步 rollout、`128` minibatch、`4` 个 update epochs、`GAE λ=0.95`、`clip=0.2`、`entropy coefficient=0.01` 和 `target KL=0.02`。公共 `--learning-rate` 默认仍为 `1e-4`。PPO 不使用 replay buffer、epsilon、target network 或 n-step。
+PPO 默认使用 `2048` 步 rollout、`128` minibatch、`4` 个 update epochs、`GAE λ=0.95`、`clip=0.2` 和 `target KL=0.02`。entropy coefficient 从首局的 `0.05` 线性退火到末局的 `0.001`；可用 `--ppo-entropy-anneal-episodes` 单独指定退火局数。`experiment_ppo` 的进食奖励为 `4.0`，碰撞惩罚保持 `-4.0`。公共 `--learning-rate` 默认仍为 `1e-4`。
 
 按最新一次 10×10 实验配置运行 PPO（仅替换算法和算法专属参数，学习率采用当前公共默认值）：
 
@@ -131,7 +131,7 @@ bash scripts/train_autodl.sh \
   --algorithm ppo \
   --width 10 --height 10 \
   --state-mode hybrid \
-  --reward-profile experiment8 --potential-reward \
+  --reward-profile experiment_ppo --potential-reward \
   --max-episodes 40000 \
   --batch-size 128 --gamma 0.99 --learning-rate 0.0001 \
   --hidden-size 256 \
@@ -140,7 +140,9 @@ bash scripts/train_autodl.sh \
   --ppo-rollout-steps 2048 --ppo-update-epochs 4 \
   --ppo-gae-lambda 0.95 --ppo-clip-coefficient 0.2 \
   --ppo-value-clip-coefficient 0.2 \
-  --ppo-entropy-coefficient 0.01 \
+  --ppo-entropy-coefficient 0.05 \
+  --ppo-entropy-coefficient-end 0.001 \
+  --ppo-entropy-anneal-episodes 40000 \
   --ppo-value-loss-coefficient 0.5 \
   --ppo-max-grad-norm 0.5 --ppo-target-kl 0.02 \
   --early-stop --min-episodes 15000 \
@@ -426,6 +428,12 @@ uv run --extra cpu python -m snake_ai.evaluate \
 ```
 
 达到 `--max-steps` 但环境尚未终止的局会记录为 `timed_out=True`。该上限只限制评估，不改变训练 episode 的步数规则。
+
+PPO 的循环回退默认关闭，此时评估保持纯 `argmax`。显式传入下列参数后，同一完整状态再次出现时会依次尝试第二、第三高概率动作；训练入口传入同名参数时，只影响阶段验证，不影响训练采样：
+
+```bash
+uv run --extra cpu python -m snake_ai.evaluate --algorithm ppo --argmax-cycle-fallback
+```
 
 只有传入 `--tensorboard` 时，评估才会写入 `eval_metrics.csv` 和 `.eval` TensorBoard event；输出目录默认映射到 checkpoint 对应的 `runs/<run_name>`，也可用 `--eval-output-dir` 覆盖。每次评估开始时会覆盖 `eval_metrics.csv`，避免中断重跑或评估不同 checkpoint 时混入旧数据。
 

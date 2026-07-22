@@ -92,15 +92,17 @@ EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     historical_source_revision="62ff05d5a8d7b65472a984e56647f2c20bceb915",
 )
 
-# PPO 专用奖励配置 —— 将 experiment8 的所有奖励项除以 25，
-# 使 value function 的 MSE loss 保持在合理范围（≈1），避免梯度被 value loss 主导。
+# PPO 专用奖励配置 —— 大部分奖励项沿用 experiment8 / 25 的尺度，
+# 但经 6x6/10x10 Hybrid 对照实验后，将吃食奖励提高到 4.0，增强成功信号。
+# 碰撞惩罚保持 -4.0，使成功进食与失败碰撞的绝对量级对称。
+# 其余缩放继续使 value function 的 MSE loss 保持在合理范围（≈1）。
 # 搭配 --ppo-normalize-returns（默认开启）时，归一化 returns 可进一步稳定训练。
 EXPERIMENT_PPO_REWARD_CONFIG = RewardConfig(
     name="experiment_ppo",
     potential_reward=True,
     cost_rewards=True,
     progress_beta=2.0 / 25,
-    food_reward=10.0 / 25,
+    food_reward=4.0,
     collision_penalty=-100.0 / 25,
     starvation_penalty=-12.0 / 25,
     win_reward=20.0 / 25,
@@ -173,7 +175,9 @@ class PPOConfig:
     gae_lambda: float = 0.95
     clip_coefficient: float = 0.2
     value_clip_coefficient: float = 0.2
-    entropy_coefficient: float = 0.01
+    entropy_coefficient: float = 0.05
+    entropy_coefficient_end: float = 0.001
+    entropy_anneal_episodes: int | None = None
     value_loss_coefficient: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: float | None = 0.02

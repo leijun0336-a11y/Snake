@@ -81,6 +81,7 @@ class SelectionThresholds:
 
 DEFAULT_SELECTION_THRESHOLDS = SelectionThresholds()
 
+
 # 验证阶段的事件记录
 @dataclass(frozen=True)
 class ValidationEvent:
@@ -109,6 +110,7 @@ class StagedValidationDecision:
     best_updated: bool = False
     stop_reason: Literal["target_validation", "validation_patience"] | None = None
 
+
 # 不同的验证阶段使用不同的随机种子
 def make_episode_seeds(
     base_seed: int,
@@ -122,7 +124,7 @@ def make_episode_seeds(
         raise ValueError(
             f"validation episodes must be less than {SEED_SET_STRIDE} to keep seed sets disjoint"
         )
-    
+
     # 种子计算方法：基础种子值+之前定义的种子集合索引*步长
     start = base_seed + SEED_SET_INDEX[seed_set] * SEED_SET_STRIDE
     # 返回一个元组，包含从 start 开始的连续整数，长度为 episodes
@@ -174,7 +176,7 @@ def validation_patience_exhausted(current_rounds: int, patience: int) -> bool:
 # 当前模型是否成为新的最佳模型
 # 是否因为达到目标或长期无改进而停止训练
 def run_staged_validation(
-    *,            # `*` 后面的参数必须通过“参数名=值”的方式传入。
+    *,  # `*` 后面的参数必须通过“参数名=值”的方式传入。
     episode: int,
     state: StagedValidationState,
     evaluator: Callable[[SeedSetName], ValidationResult],
@@ -388,6 +390,9 @@ def evaluate_policy(
 
     try:
         for index, episode_seed in enumerate(seeds, start=1):
+            reset_evaluation_state = getattr(agent, "reset_evaluation_state", None)
+            if callable(reset_evaluation_state):
+                reset_evaluation_state()
             state = env.reset(seed=int(episode_seed))
             if full_score is None:
                 full_score = env.width * env.height - len(env.snake)
@@ -484,10 +489,7 @@ def _selection_mean_delta(
     if full_score == SELECTION_REFERENCE_FULL_SCORE:
         # 保留历史 6x6 的原始减法路径，避免额外除法和乘法引入任何浮点差异。
         return candidate.mean_score - incumbent.mean_score
-    completion_delta = (
-        candidate.mean_score / full_score
-        - incumbent.mean_score / full_score
-    )
+    completion_delta = candidate.mean_score / full_score - incumbent.mean_score / full_score
     return completion_delta * SELECTION_REFERENCE_FULL_SCORE
 
 

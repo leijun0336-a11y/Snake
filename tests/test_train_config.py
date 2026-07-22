@@ -47,6 +47,10 @@ def test_ppo_config_uses_aligned_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     assert ppo_config.update_epochs == 4
     assert ppo_config.gae_lambda == pytest.approx(0.95)
     assert ppo_config.target_kl == pytest.approx(0.02)
+    assert ppo_config.entropy_coefficient == pytest.approx(0.05)
+    assert ppo_config.entropy_coefficient_end == pytest.approx(0.001)
+    assert ppo_config.entropy_anneal_episodes == train_config.episodes == 15_000
+    assert args.argmax_cycle_fallback is False
 
 
 def test_ppo_rollout_must_be_divisible_by_batch(monkeypatch: pytest.MonkeyPatch) -> None:

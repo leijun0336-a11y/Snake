@@ -148,7 +148,68 @@ def test_ppo_checkpoint_round_trip(tmp_path: Path) -> None:
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
     assert checkpoint["algorithm"] == "ppo"
     assert checkpoint["run_config"] == {"algorithm": "ppo"}
+    assert checkpoint["entropy_coefficient"] == pytest.approx(0.05)
+    assert checkpoint["entropy_coefficient_start"] == pytest.approx(0.05)
+    assert checkpoint["entropy_coefficient_end"] == pytest.approx(0.001)
+    assert checkpoint["entropy_anneal_episodes"] == 15_000
     assert loaded.hidden_size == 32
     assert loaded.cnn_channels == 8
     assert loaded.cnn_output_channels == 4
     assert loaded.cnn_dilations == (1,)
+
+
+def test_entropy_coefficient_anneals_linearly_to_configured_floor() -> None:
+    agent = PPOAgent(
+        state_size=20,
+        action_size=3,
+        rollout_steps=4,
+        batch_size=2,
+        entropy_anneal_episodes=5,
+        seed=1,
+    )
+
+    assert agent.entropy_coefficient_start == pytest.approx(0.05)
+    assert agent.entropy_coefficient_end == pytest.approx(0.001)
+    assert agent.set_entropy_for_episode(1) == pytest.approx(0.05)
+    assert agent.set_entropy_for_episode(3) == pytest.approx(0.0255)
+    assert agent.set_entropy_for_episode(5) == pytest.approx(0.001)
+    assert agent.set_entropy_for_episode(6) == pytest.approx(0.001)
+
+
+def test_argmax_cycle_fallback_tries_ranked_alternatives_and_resets() -> None:
+    class FixedPolicy(torch.nn.Module):
+        def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            logits = torch.tensor(
+                [[3.0, 2.0, 1.0]],
+                device=state.device,
+            )
+            batch_size = state.shape[0]
+            return logits.repeat(batch_size, 1), torch.zeros(batch_size, device=state.device)
+
+    state = np.zeros(20, dtype=np.float32)
+    default_agent = PPOAgent(
+        state_size=20,
+        action_size=3,
+        rollout_steps=4,
+        batch_size=2,
+        seed=1,
+    )
+    default_agent.policy_net = FixedPolicy()
+    assert default_agent.argmax_cycle_fallback is False
+    assert [default_agent.act(state, training=False) for _ in range(3)] == [0, 0, 0]
+
+    agent = PPOAgent(
+        state_size=20,
+        action_size=3,
+        rollout_steps=4,
+        batch_size=2,
+        argmax_cycle_fallback=True,
+        seed=1,
+    )
+    agent.policy_net = FixedPolicy()
+    state = np.zeros(20, dtype=np.float32)
+
+    assert [agent.act(state, training=False) for _ in range(4)] == [0, 1, 2, 1]
+    agent.reset_evaluation_state()
+    assert agent.act(state, training=False) == 0
+    assert agent.act(np.ones(20, dtype=np.float32), training=False) == 0

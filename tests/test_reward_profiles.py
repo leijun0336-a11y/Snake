@@ -2,7 +2,11 @@ from argparse import Namespace
 
 import pytest
 
-from snake_ai.config import EXPERIMENT8_REWARD_CONFIG, get_reward_config
+from snake_ai.config import (
+    EXPERIMENT8_REWARD_CONFIG,
+    EXPERIMENT_PPO_REWARD_CONFIG,
+    get_reward_config,
+)
 from snake_ai.game import Direction, Point, SnakeEnv
 from snake_ai.train import resolve_max_steps_per_episode
 
@@ -41,9 +45,14 @@ def test_experiment8_profile_is_frozen_to_historical_values() -> None:
     assert config.starvation_limit_mode == "board_area"
     assert config.starvation_comparison == "gt"
     assert config.progress_mode == "legacy_food_target"
-    assert config.historical_source_revision == (
-        "62ff05d5a8d7b65472a984e56647f2c20bceb915"
-    )
+    assert config.historical_source_revision == ("62ff05d5a8d7b65472a984e56647f2c20bceb915")
+
+
+def test_experiment_ppo_uses_validated_food_collision_scale() -> None:
+    config = EXPERIMENT_PPO_REWARD_CONFIG
+
+    assert config.food_reward == pytest.approx(4.0)
+    assert config.collision_penalty == pytest.approx(-4.0)
 
 
 def test_unknown_reward_profile_does_not_fallback() -> None:
@@ -124,10 +133,7 @@ def test_experiment8_board_completion_matches_historical_total() -> None:
     food = Point(5, 5)
     head = Point(4, 5)
     env.snake = [head] + [
-        Point(x, y)
-        for y in range(6)
-        for x in range(6)
-        if Point(x, y) not in (head, food)
+        Point(x, y) for y in range(6) for x in range(6) if Point(x, y) not in (head, food)
     ]
     env.direction = Direction.RIGHT
     env.food = food
@@ -176,3 +182,27 @@ def test_profile_step_limit_resolution_is_explicit() -> None:
         )
         == 500
     )
+
+
+def test_experiment_ppo_environment_emits_food_four_and_collision_minus_four() -> None:
+    eating = SnakeEnv(width=6, height=6, seed=1, reward_profile="experiment_ppo")
+    eating.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
+    eating.direction = Direction.RIGHT
+    eating.food = Point(3, 2)
+
+    _, _, done, info = eating.step(0)
+
+    assert done is False
+    assert info["reward_food"] == pytest.approx(4.0)
+    eating.close()
+
+    collision = SnakeEnv(width=6, height=6, seed=1, reward_profile="experiment_ppo")
+    collision.snake = [Point(5, 3), Point(4, 3), Point(3, 3)]
+    collision.direction = Direction.RIGHT
+
+    _, reward, done, info = collision.step(0)
+
+    assert done is True
+    assert reward == pytest.approx(-4.0)
+    assert info["reward_terminal"] == pytest.approx(-4.0)
+    collision.close()

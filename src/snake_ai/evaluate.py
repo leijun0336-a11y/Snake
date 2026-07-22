@@ -3,7 +3,7 @@
 # 默认会渲染，不想渲染可以加上 --no-render
 
 # 处理自引用问题
-from __future__ import annotations  
+from __future__ import annotations
 
 import argparse
 import csv
@@ -41,7 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--algorithm", choices=("dqn", "ppo"), default=None)
     parser.add_argument("--episodes", type=int, default=1000)
     # 防止转圈。
-    parser.add_argument("--max-steps",type=int,default=1000)
+    parser.add_argument("--max-steps", type=int, default=1000)
+    parser.add_argument(
+        "--argmax-cycle-fallback",
+        action="store_true",
+        help="use second/third-ranked actions when a PPO argmax policy repeats a state",
+    )
     # 不渲染，默认渲染。
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--width", type=int, default=None)
@@ -53,19 +58,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tensorboard", action="store_true")
     # 指定评估指标输出目录；不指定时默认绑定到最近一次训练的 runs/dqn_* 目录。
     parser.add_argument("--eval-output-dir", type=Path, default=None)
-    parser.add_argument(
-        "--state-mode", choices=("vector", "grid", "hybrid"), default=None
-    )
+    parser.add_argument("--state-mode", choices=("vector", "grid", "hybrid"), default=None)
     return parser.parse_args()
+
 
 def _experiment_dirs(root: Path, algorithm: str | None = None) -> list[Path]:
     prefixes = (algorithm,) if algorithm is not None else ("dqn", "ppo")
-    return [
-        path
-        for prefix in prefixes
-        for path in root.glob(f"{prefix}_*")
-        if path.is_dir()
-    ]
+    return [path for prefix in prefixes for path in root.glob(f"{prefix}_*") if path.is_dir()]
 
 
 def _experiment_timestamp(path: Path) -> str:
@@ -95,9 +94,7 @@ def find_latest_checkpoint(
     latest_dir = max(checkpoint_dirs, key=_experiment_timestamp)
     latest_checkpoint = latest_dir / "latest.pt"
     if not latest_checkpoint.exists():
-        raise FileNotFoundError(
-            f"No latest.pt found in latest checkpoint directory {latest_dir}"
-        )
+        raise FileNotFoundError(f"No latest.pt found in latest checkpoint directory {latest_dir}")
     return latest_checkpoint
 
 
@@ -203,9 +200,15 @@ def build_configs(
     checkpoint_environment = (
         get_checkpoint_environment(checkpoint_path) if checkpoint_path is not None else {}
     )
-    width = args.width if args.width is not None else checkpoint_environment.get("width", EnvConfig.width)
+    width = (
+        args.width
+        if args.width is not None
+        else checkpoint_environment.get("width", EnvConfig.width)
+    )
     height = (
-        args.height if args.height is not None else checkpoint_environment.get("height", EnvConfig.height)
+        args.height
+        if args.height is not None
+        else checkpoint_environment.get("height", EnvConfig.height)
     )
     if args.episodes < 1:
         raise ValueError("episodes must be at least 1")
@@ -259,6 +262,8 @@ def main() -> None:
     print(f"checkpoint={checkpoint_path}")
     print(f"algorithm={algorithm}")
     print(f"state_mode={state_mode}")
+    if algorithm == "ppo":
+        print(f"argmax_cycle_fallback={args.argmax_cycle_fallback}")
     if output_dir is not None:
         print(f"output_dir={output_dir}")
 
@@ -278,9 +283,7 @@ def main() -> None:
     )
     common_agent_kwargs = dict(
         # 状态维度
-        state_size=(
-            env.grid_state_shape if state_mode in ("grid", "hybrid") else env.state_size
-        ),
+        state_size=(env.grid_state_shape if state_mode in ("grid", "hybrid") else env.state_size),
         # 动作维度
         action_size=env.action_size,
         hidden_size=train_config.hidden_size,
@@ -293,7 +296,7 @@ def main() -> None:
         seed=train_config.seed,
     )
     if algorithm == "ppo":
-        agent = PPOAgent(**common_agent_kwargs)
+        agent = PPOAgent(**common_agent_kwargs, argmax_cycle_fallback=args.argmax_cycle_fallback)
     else:
         agent = DQNAgent(
             **common_agent_kwargs,
@@ -322,7 +325,7 @@ def main() -> None:
     def record_episode(episode: int, result: ValidationEpisode) -> None:
         # episode：当前是第几局评估，例如第 1 局、第 2 局。
         # 这一局的评估结果，包含得分、步数、最大蛇长、是否超时等信息。
-        
+
         scores.append(result.score)
         steps.append(result.steps)
         max_lengths.append(result.max_snake_length)
