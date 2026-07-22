@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
 from torch import nn, optim
 
-from snake_ai.agents.replay_buffer import NStepAccumulator, ReplayBuffer, Transition
+from snake_ai.agents.replay_buffer import (
+    NStepAccumulator,
+    PrioritizedReplayBuffer,
+    ReplayBuffer,
+    Transition,
+)
 from snake_ai.models.q_network import QNetwork
 
 
@@ -33,6 +38,12 @@ class DQNAgent:
         n_step: int = 1,
         # 经验回放池容量，最多保存多少条 Transition。
         replay_buffer_size: int = 100_000,
+        # 是否使用 proportional Prioritized Experience Replay。
+        per: bool = False,
+        per_alpha: float = 0.6,
+        per_beta_start: float = 0.4,
+        per_beta_anneal_steps: int = 100_000,
+        per_epsilon: float = 1e-6,
         # 每次训练从经验池随机采样多少条经验。
         batch_size: int = 64,
         # 初始探索率，训练早期按这个概率随机选动作。
@@ -78,6 +89,15 @@ class DQNAgent:
         if n_step < 1:
             raise ValueError("n_step must be at least 1")
         self.n_step = n_step
+        if not 0.0 <= per_beta_start <= 1.0:
+            raise ValueError("per_beta_start must be between 0 and 1")
+        if per_beta_anneal_steps < 1:
+            raise ValueError("per_beta_anneal_steps must be at least 1")
+        self.per = per
+        self.per_alpha = per_alpha
+        self.per_beta_start = per_beta_start
+        self.per_beta_anneal_steps = per_beta_anneal_steps
+        self.per_epsilon = per_epsilon
         self.epsilon_start = epsilon_start
         self.epsilon = epsilon_start
         self.epsilon_end = epsilon_end
@@ -101,8 +121,17 @@ class DQNAgent:
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
         # DQN 常用 Huber loss；相比 MSE，它会降低大 TD error 对梯度的冲击。
-        self.loss_fn = nn.SmoothL1Loss()
-        self.replay_buffer = ReplayBuffer(replay_buffer_size, seed=seed)
+        self.loss_fn = nn.SmoothL1Loss(reduction="none")
+        self.replay_buffer: ReplayBuffer | PrioritizedReplayBuffer
+        if per:
+            self.replay_buffer = PrioritizedReplayBuffer(
+                replay_buffer_size,
+                alpha=per_alpha,
+                epsilon=per_epsilon,
+                seed=seed,
+            )
+        else:
+            self.replay_buffer = ReplayBuffer(replay_buffer_size, seed=seed)
         self.n_step_accumulator = NStepAccumulator(n_step, gamma)
 
     # 动作采样，DQN采用epsilon-greedy
@@ -159,8 +188,19 @@ class DQNAgent:
         if len(self.replay_buffer) < self.batch_size:
             return None
 
-        # 从经验采样池随机采样作为一个batch，一个列表，每个列表元素是一条“经验”
-        batch = self.replay_buffer.sample(self.batch_size)
+        # PER 和均匀回放使用两条显式路径；启用 PER 时不会静默退回均匀采样。
+        if self.per:
+            prioritized_buffer = cast(PrioritizedReplayBuffer, self.replay_buffer)
+            prioritized_sample = prioritized_buffer.sample(self.batch_size, self._per_beta())
+            batch = prioritized_sample.transitions
+            importance_weights = torch.tensor(
+                prioritized_sample.weights,
+                dtype=torch.float32,
+                device=self.device,
+            )
+        else:
+            replay_buffer = cast(ReplayBuffer, self.replay_buffer)
+            batch = replay_buffer.sample(self.batch_size)
 
         # 提取batch中的信息
         states = self._state_batch_to_tensor([item.state for item in batch])
@@ -193,8 +233,13 @@ class DQNAgent:
             # [batch_size, 1]，如果 done 为 True，则不考虑未来奖励
             target_q = self._calculate_td_target(rewards, next_q, dones, sampled_n_steps)
 
+        td_errors = target_q - current_q
         # Huber loss 用于降低离群 TD error 对训练稳定性的影响。
-        loss = self.loss_fn(current_q, target_q)
+        elementwise_loss = self.loss_fn(current_q, target_q)
+        if self.per:
+            loss = (importance_weights * elementwise_loss).mean()
+        else:
+            loss = elementwise_loss.mean()
 
         self.optimizer.zero_grad()
         # 反向传播，计算所有参数的梯度
@@ -203,6 +248,12 @@ class DQNAgent:
         nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
         # 更新参数
         self.optimizer.step()
+
+        if self.per:
+            prioritized_buffer.update_priorities(
+                prioritized_sample.indices,
+                tuple(float(value) for value in td_errors.detach().cpu().tolist()),
+            )
 
         # 在经验池完全充足的情况下，蛇每走一格就learn_steps+1
         self.learn_steps += 1
@@ -213,6 +264,10 @@ class DQNAgent:
 
         # 返回浮点数类型的loss
         return float(loss.item())
+
+    def _per_beta(self) -> float:
+        progress = min(self.learn_steps / self.per_beta_anneal_steps, 1.0)
+        return self.per_beta_start + progress * (1.0 - self.per_beta_start)
 
     def _calculate_td_target(
         self,

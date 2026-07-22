@@ -1,6 +1,6 @@
-from snake_ai.agents.replay_buffer import ReplayBuffer, Transition
+from snake_ai.agents.replay_buffer import PrioritizedReplayBuffer, ReplayBuffer, Transition
 
-__all__ = ["DQNAgent", "PPOAgent", "ReplayBuffer", "Transition"]
+__all__ = ["DQNAgent", "PPOAgent", "PrioritizedReplayBuffer", "ReplayBuffer", "Transition"]
 
 
 def __getattr__(name: str):

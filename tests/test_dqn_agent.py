@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from snake_ai.agents.dqn_agent import DQNAgent
+from snake_ai.agents.replay_buffer import PrioritizedReplayBuffer, ReplayBuffer
 from snake_ai.models.q_network import QNetwork
 
 
@@ -20,6 +21,29 @@ def test_agent_default_learning_rate_is_one_e_minus_four() -> None:
 
     assert agent.learning_rate == pytest.approx(1e-4)
     assert agent.optimizer.param_groups[0]["lr"] == pytest.approx(1e-4)
+    assert agent.per is False
+    assert type(agent.replay_buffer) is ReplayBuffer
+
+
+def test_per_agent_uses_prioritized_replay_and_updates() -> None:
+    agent = DQNAgent(
+        state_size=2,
+        action_size=2,
+        batch_size=2,
+        per=True,
+        per_beta_anneal_steps=10,
+        seed=1,
+    )
+    agent.remember([0.0, 0.0], 0, 0.0, [1.0, 0.0], False)
+    agent.remember([1.0, 0.0], 1, 1.0, [0.0, 1.0], True)
+
+    assert type(agent.replay_buffer) is PrioritizedReplayBuffer
+    assert agent._per_beta() == pytest.approx(0.4)
+    assert isinstance(agent.learn(), float)
+    assert agent.learn_steps == 1
+
+    agent.learn_steps = 10
+    assert agent._per_beta() == pytest.approx(1.0)
 
 
 def test_grid_agent_outputs_action() -> None:

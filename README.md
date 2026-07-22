@@ -158,6 +158,14 @@ bash scripts/train_autodl.sh \
 uv run --extra cu124 python -m snake_ai.train --n-step 3
 ```
 
+DQN 默认使用均匀经验回放。显式加入 `--PER` 后启用 proportional PER；新经验以当前最大优先级写入，采样使用 Sum Tree，Huber loss 使用 importance-sampling 权重，并根据 Double DQN TD error 更新优先级。默认参数为 `alpha=0.6`、`beta=0.4` 线性退火至 `1.0`（100,000 次学习更新）、`epsilon=1e-6`：
+
+```bash
+uv run --extra cu124 python -m snake_ai.train --PER
+```
+
+`--PER` 是 DQN 专属参数，与 `--algorithm ppo` 同时使用会直接报错。
+
 训练默认不连接 W&B。首次使用先执行 `uv run wandb login`，再显式加入 `--wandb`：
 
 ```bash

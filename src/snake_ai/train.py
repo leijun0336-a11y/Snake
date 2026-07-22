@@ -85,6 +85,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate)
     parser.add_argument("--replay-buffer-size", type=int, default=TrainConfig.replay_buffer_size)
+    parser.add_argument(
+        "--PER",
+        dest="per",
+        action="store_true",
+        help="enable prioritized experience replay for DQN (default: disabled)",
+    )
     parser.add_argument("--epsilon-start", type=float, default=TrainConfig.epsilon_start)
     parser.add_argument("--epsilon-end", type=float, default=TrainConfig.epsilon_end)
     # 是否采用指数衰减；默认关闭，即采用线性衰减。
@@ -228,6 +234,8 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
     if any(dilation <= 0 for dilation in args.cnn_dilations):
         raise ValueError("cnn_dilations must contain positive integers")
     if args.algorithm == "ppo":
+        if args.per:
+            raise ValueError("--PER is only available with --algorithm dqn")
         if args.ppo_rollout_steps < 1:
             raise ValueError("ppo_rollout_steps must be at least 1")
         if args.batch_size > args.ppo_rollout_steps:
@@ -259,6 +267,7 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         n_step=args.n_step,
         learning_rate=args.learning_rate,
         replay_buffer_size=args.replay_buffer_size,
+        per=args.per,
         epsilon_start=args.epsilon_start,
         epsilon_end=args.epsilon_end,
         epsilon_exp_decay=args.epsilon_exp_decay,
@@ -509,6 +518,11 @@ def main() -> None:
             **common_agent_kwargs,
             n_step=train_config.n_step,
             replay_buffer_size=train_config.replay_buffer_size,
+            per=train_config.per,
+            per_alpha=train_config.per_alpha,
+            per_beta_start=train_config.per_beta_start,
+            per_beta_anneal_steps=train_config.per_beta_anneal_steps,
+            per_epsilon=train_config.per_epsilon,
             epsilon_start=train_config.epsilon_start,
             epsilon_end=train_config.epsilon_end,
             epsilon_exp_decay=train_config.epsilon_exp_decay,
@@ -542,6 +556,11 @@ def main() -> None:
         for dqn_only_field in (
             "n_step",
             "replay_buffer_size",
+            "per",
+            "per_alpha",
+            "per_beta_start",
+            "per_beta_anneal_steps",
+            "per_epsilon",
             "epsilon_start",
             "epsilon_end",
             "epsilon_exp_decay",

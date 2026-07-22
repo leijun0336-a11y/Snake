@@ -151,6 +151,12 @@ class TrainConfig:
     n_step: int = 1
     learning_rate: float = 1e-4
     replay_buffer_size: int = 100_000
+    # PER 默认关闭；启用后使用 proportional priority 和线性退火的 IS 权重。
+    per: bool = False
+    per_alpha: float = 0.6
+    per_beta_start: float = 0.4
+    per_beta_anneal_steps: int = 100_000
+    per_epsilon: float = 1e-6
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
     # 是否使用指数衰减；False 表示使用线性衰减。

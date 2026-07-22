@@ -5,6 +5,7 @@ import random
 from collections import deque
 from dataclasses import dataclass
 from itertools import islice
+from math import isfinite, nextafter
 from typing import Any
 
 
@@ -143,4 +144,150 @@ class ReplayBuffer:
 
     def __len__(self) -> int:
         # 让 len(buffer) 返回已写入经验数，而不是预分配列表容量。
+        return self.size
+
+
+@dataclass(frozen=True)
+class PrioritizedReplaySample:
+    transitions: tuple[Transition, ...]
+    indices: tuple[int, ...]
+    weights: tuple[float, ...]
+
+
+class _SumTree:
+    """用数组存储叶子权重及其父节点和，支持 O(log N) 更新和采样。"""
+
+    def __init__(self, capacity: int) -> None:
+        self.capacity = capacity
+        self.values = [0.0] * (2 * capacity)
+
+    @property
+    def total(self) -> float:
+        return self.values[1]
+
+    def update(self, index: int, value: float) -> None:
+        tree_index = index + self.capacity
+        delta = value - self.values[tree_index]
+        while tree_index >= 1:
+            self.values[tree_index] += delta
+            tree_index //= 2
+
+    def value(self, index: int) -> float:
+        return self.values[index + self.capacity]
+
+    def find_prefixsum_index(self, mass: float) -> int:
+        if not 0.0 <= mass < self.total:
+            raise ValueError("mass must satisfy 0 <= mass < total priority")
+        tree_index = 1
+        while tree_index < self.capacity:
+            left = tree_index * 2
+            if mass < self.values[left]:
+                tree_index = left
+            else:
+                mass -= self.values[left]
+                tree_index = left + 1
+        return tree_index - self.capacity
+
+
+class PrioritizedReplayBuffer:
+    """基于 proportional prioritization 和 Sum Tree 的优先经验回放池。"""
+
+    def __init__(
+        self,
+        capacity: int,
+        alpha: float = 0.6,
+        epsilon: float = 1e-6,
+        seed: int | None = None,
+    ) -> None:
+        if capacity <= 0:
+            raise ValueError("capacity must be positive")
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError("alpha must be between 0 and 1")
+        if epsilon <= 0.0:
+            raise ValueError("epsilon must be positive")
+        self.capacity = capacity
+        self.alpha = alpha
+        self.epsilon = epsilon
+        self.memory: list[Transition | None] = [None] * capacity
+        self.position = 0
+        self.size = 0
+        self.max_priority = 1.0
+        self.tree = _SumTree(capacity)
+        self.random = random.Random(seed)
+
+    def push(
+        self,
+        state: Any,
+        action: int,
+        reward: float,
+        next_state: Any,
+        done: bool,
+        n_steps: int = 1,
+    ) -> None:
+        if n_steps < 1:
+            raise ValueError("n_steps must be at least 1")
+        self.memory[self.position] = Transition(
+            state,
+            action,
+            reward,
+            next_state,
+            done,
+            n_steps,
+        )
+        self.tree.update(self.position, self.max_priority**self.alpha)
+        self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def sample(self, batch_size: int, beta: float) -> PrioritizedReplaySample:
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        if batch_size > self.size:
+            raise ValueError("batch_size cannot be larger than buffer length")
+        if not 0.0 <= beta <= 1.0:
+            raise ValueError("beta must be between 0 and 1")
+
+        total_priority = self.tree.total
+        if total_priority <= 0.0 or not isfinite(total_priority):
+            raise RuntimeError("total priority must be finite and positive")
+
+        segment = total_priority / batch_size
+        transitions: list[Transition] = []
+        indices: list[int] = []
+        weights: list[float] = []
+        for segment_index in range(batch_size):
+            mass = min(
+                (segment_index + self.random.random()) * segment,
+                nextafter(total_priority, 0.0),
+            )
+            index = self.tree.find_prefixsum_index(mass)
+            transition = self.memory[index]
+            if transition is None:
+                raise RuntimeError("Prioritized replay sampled an uninitialized slot")
+            probability = self.tree.value(index) / total_priority
+            transitions.append(transition)
+            indices.append(index)
+            weights.append((self.size * probability) ** (-beta))
+
+        max_weight = max(weights)
+        normalized_weights = tuple(weight / max_weight for weight in weights)
+        return PrioritizedReplaySample(tuple(transitions), tuple(indices), normalized_weights)
+
+    def update_priorities(self, indices: tuple[int, ...], td_errors: tuple[float, ...]) -> None:
+        if len(indices) != len(td_errors):
+            raise ValueError("indices and td_errors must have the same length")
+        # 分层采样仍可能重复命中同一经验；取最大 TD error 避免更新结果依赖 batch 顺序。
+        priorities_by_index: dict[int, float] = {}
+        for index, td_error in zip(indices, td_errors, strict=True):
+            if not 0 <= index < self.size:
+                raise IndexError(f"priority index {index} is outside the active buffer")
+            if not isfinite(td_error):
+                raise ValueError("td_errors must be finite")
+            priority = abs(td_error) + self.epsilon
+            priorities_by_index[index] = max(priorities_by_index.get(index, 0.0), priority)
+
+        for index, priority in priorities_by_index.items():
+            self.max_priority = max(self.max_priority, priority)
+            self.tree.update(index, priority**self.alpha)
+
+    def __len__(self) -> int:
         return self.size

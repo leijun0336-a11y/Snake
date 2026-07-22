@@ -31,6 +31,8 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert train_config.learning_rate == pytest.approx(1e-4)
     assert args.learning_rate == pytest.approx(1e-4)
     assert args.algorithm == "dqn"
+    assert args.per is False
+    assert train_config.per is False
     assert TRAINING_START_DELAY_SECONDS == 5
 
 
@@ -78,6 +80,23 @@ def test_build_configs_accepts_n_step(monkeypatch: pytest.MonkeyPatch) -> None:
     train_config, _ = build_configs(parse_args())
 
     assert train_config.n_step == 3
+
+
+def test_build_configs_enables_per_only_when_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--PER"])
+
+    train_config, _ = build_configs(parse_args())
+
+    assert train_config.per is True
+    assert train_config.per_alpha == pytest.approx(0.6)
+    assert train_config.per_beta_start == pytest.approx(0.4)
+
+
+def test_build_configs_rejects_per_for_ppo(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--algorithm", "ppo", "--PER"])
+
+    with pytest.raises(ValueError, match="only available"):
+        build_configs(parse_args())
 
 
 def test_build_configs_rejects_non_positive_n_step(
