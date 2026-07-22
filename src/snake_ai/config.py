@@ -68,7 +68,7 @@ REFERENCE_REWARD_CONFIG = RewardConfig(
 
 
 # 第八次实验 dqn_20260712_130642 的奖励配置(目前最优)。
-# 源码证据对应后来提交为 62ff05d 的工作树；不能把这些历史边界“修正”为当前语义。
+# 源码证据对应后来提交为 62ff05d 的工作树；不能把这些历史边界"修正"为当前语义。
 EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     name="experiment8",
     potential_reward=True,
@@ -92,9 +92,31 @@ EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     historical_source_revision="62ff05d5a8d7b65472a984e56647f2c20bceb915",
 )
 
-# 把所有奖励配置整理成一个“按名称查找配置”的字典，并生成所有可用配置名称。
+# PPO 专用奖励配置 —— 将 experiment8 的所有奖励项除以 25，
+# 使 value function 的 MSE loss 保持在合理范围（≈1），避免梯度被 value loss 主导。
+# 搭配 --ppo-normalize-returns（默认开启）时，归一化 returns 可进一步稳定训练。
+EXPERIMENT_PPO_REWARD_CONFIG = RewardConfig(
+    name="experiment_ppo",
+    potential_reward=True,
+    cost_rewards=True,
+    progress_beta=2.0 / 25,
+    food_reward=10.0 / 25,
+    collision_penalty=-100.0 / 25,
+    starvation_penalty=-12.0 / 25,
+    win_reward=20.0 / 25,
+    step_penalty=-0.005 / 25,
+    hunger_penalty_scale=0.02 / 25,
+    step_cost_scope="all_legal_moves",
+    terminal_cost_mode="accumulate",
+    starvation_limit_mode="2x_board_area_plus_snake_length",
+    starvation_comparison="gte",
+    progress_mode="legacy_food_target",
+)
+
+# 把所有奖励配置整理成一个"按名称查找配置"的字典，并生成所有可用配置名称。
 REWARD_CONFIGS = {
-    config.name: config for config in (REFERENCE_REWARD_CONFIG, EXPERIMENT8_REWARD_CONFIG)
+    config.name: config
+    for config in (REFERENCE_REWARD_CONFIG, EXPERIMENT8_REWARD_CONFIG, EXPERIMENT_PPO_REWARD_CONFIG)
 }
 REWARD_PROFILE_NAMES = tuple(REWARD_CONFIGS)
 
@@ -156,3 +178,4 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     target_kl: float | None = 0.02
     normalize_advantage: bool = True
+    normalize_returns: bool = True

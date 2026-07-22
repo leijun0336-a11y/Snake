@@ -97,6 +97,7 @@ class PPOAgent:
         max_grad_norm: float = 0.5,
         target_kl: float | None = 0.02,
         normalize_advantage: bool = True,
+        normalize_returns: bool = True,
         state_mode: str = "vector",
         auxiliary_size: int = 20,
         cnn_channels: int = 32,
@@ -142,6 +143,7 @@ class PPOAgent:
         self.max_grad_norm = max_grad_norm
         self.target_kl = target_kl
         self.normalize_advantage = normalize_advantage
+        self.normalize_returns = normalize_returns
         self.state_mode = state_mode
         self.auxiliary_size = auxiliary_size
         self.cnn_channels = cnn_channels
@@ -230,6 +232,10 @@ class PPOAgent:
         )
         advantages_tensor = torch.tensor(advantages, dtype=torch.float32, device=self.device)
         returns_tensor = torch.tensor(returns, dtype=torch.float32, device=self.device)
+        if self.normalize_returns and len(batch) > 1:
+            ret_mean = returns_tensor.mean()
+            ret_std = returns_tensor.std(unbiased=False) + 1e-8
+            returns_tensor = (returns_tensor - ret_mean) / ret_std
         if self.normalize_advantage and len(batch) > 1:
             advantages_tensor = (advantages_tensor - advantages_tensor.mean()) / (
                 advantages_tensor.std(unbiased=False) + 1e-8
@@ -418,6 +424,7 @@ class PPOAgent:
             "max_grad_norm": self.max_grad_norm,
             "target_kl": self.target_kl,
             "normalize_advantage": self.normalize_advantage,
+            "normalize_returns": self.normalize_returns,
         }
         if metadata is not None:
             checkpoint["run_config"] = metadata

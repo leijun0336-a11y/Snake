@@ -395,11 +395,13 @@ class SnakeEnv:
 
     @property
     def starvation_limit(self) -> int:
-        # 棋盘面积是允许连续未进食步数的基础上限。
         board_area = self.width * self.height
-        # reference 模式会在棋盘面积上加当前蛇长，蛇越长，寻找食物的宽限步数越多。
         if self.starvation_limit_mode == "board_area_plus_snake_length":
             return board_area + len(self.snake)
+        if self.starvation_limit_mode == "1.5x_board_area_plus_snake_length":
+            return int(board_area * 1.5) + len(self.snake)
+        if self.starvation_limit_mode == "2x_board_area_plus_snake_length":
+            return board_area * 2 + len(self.snake)
         # board_area 模式只使用棋盘面积作为上限。
         return board_area
 

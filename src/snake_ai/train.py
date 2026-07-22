@@ -133,6 +133,11 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=PPOConfig.normalize_advantage,
     )
+    parser.add_argument(
+        "--ppo-normalize-returns",
+        action=argparse.BooleanOptionalAction,
+        default=PPOConfig.normalize_returns,
+    )
     # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
     parser.add_argument("--early-stop", action="store_true")
     # 至少训练多少局后，才允许基于阶段验证的早停判断生效。
@@ -153,7 +158,7 @@ def resolve_max_steps_per_episode(args: argparse.Namespace) -> int | None:
         raise ValueError("max_steps_per_episode must be at least 1")
     if args.max_steps_per_episode is not None:
         return args.max_steps_per_episode
-    if args.reward_profile == "experiment8":
+    if args.reward_profile in ("experiment8", "experiment_ppo"):
         return None
     return TrainConfig.max_steps_per_episode
 
@@ -267,10 +272,11 @@ def build_ppo_config(args: argparse.Namespace) -> PPOConfig:
         max_grad_norm=args.ppo_max_grad_norm,
         target_kl=args.ppo_target_kl,
         normalize_advantage=args.ppo_normalize_advantage,
+        normalize_returns=args.ppo_normalize_returns,
     )
 
 
-# 在训练开始前，打印一份“训练会在什么条件下停止”的概览
+# 在训练开始前，打印一份"训练会在什么条件下停止"的概览
 def print_stop_overview(
     args: argparse.Namespace,
     train_config: TrainConfig,
@@ -471,6 +477,7 @@ def main() -> None:
             max_grad_norm=ppo_config.max_grad_norm,
             target_kl=ppo_config.target_kl,
             normalize_advantage=ppo_config.normalize_advantage,
+            normalize_returns=ppo_config.normalize_returns,
         )
     else:
         agent = DQNAgent(
@@ -853,7 +860,7 @@ def main() -> None:
                 episode_rewards.append(episode_reward)
                 mean_reward = sum(episode_rewards[-100:]) / min(len(episode_rewards), 100)
                 mean_rewards.append(mean_reward)
-                # episode_steps 用来区分“很快撞死”和“走了很久但没吃到食物”。
+                # episode_steps 用来区分"很快撞死"和"走了很久但没吃到食物"。
                 episode_steps = int(info["steps"])
                 # 吃食效率 = 吃到的食物数 / 存活步数，衡量策略是否直奔目标
                 score_per_step = score / episode_steps if episode_steps > 0 else 0.0
