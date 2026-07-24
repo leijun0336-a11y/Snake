@@ -17,13 +17,13 @@ class AIProfile:
     reward_profile: str
 
 
-DEFAULT_AI_ID = "experiment_20260715"
+DEFAULT_AI_ID = "dqn_20260722_201922"
 
 AI_PROFILES: dict[str, AIProfile] = {
     DEFAULT_AI_ID: AIProfile(
         id=DEFAULT_AI_ID,
         display_name="Snake AI",
-        checkpoint_path=CHECKPOINT_DIR / "dqn_20260715_091735" / "best.pt",
+        checkpoint_path=CHECKPOINT_DIR / "dqn_20260722_201922" / "best.pt",
         state_mode="hybrid",
         width=6,
         height=6,
