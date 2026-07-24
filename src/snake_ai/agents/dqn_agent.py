@@ -55,7 +55,7 @@ class DQNAgent:
         # 每局结束后 epsilon 的指数衰减系数；仅在指数衰减模式下使用。
         epsilon_exp_factor: float = 0.995,
         # 线性衰减到 epsilon_end 需要的 episode 数。
-        epsilon_linear_episodes: int = 7500,
+        epsilon_linear_episodes: int = 15_000,
         # 每隔多少次学习步骤，把 policy_net 的参数复制一份给 target_net.
         target_update_interval: int = 1000,
         # 是否使用 Dueling DQN 架构，分离状态值和优势值。

@@ -23,18 +23,21 @@ uv run --extra cpu snake-play
 | 奖励配置 | `experiment8` |
 | 势函数进度奖励 | 开启，可用 `--no-potential-reward` 关闭 |
 | 步成本与饥饿成本 | 开启，可用 `--no-cost-rewards` 关闭 |
-| 最大训练局数 | `15000` |
+| 算法 | `dqn`（Double / Dueling DQN） |
+| 最大训练局数 | `40000` |
 | 单局训练步数上限 | `experiment8` 不设独立上限；`reference` 默认 `500` |
 | Batch size | `128` |
 | Discount factor `gamma` | `0.99` |
 | TD target 步数 `n-step` | `1` |
 | Learning rate | `0.0001` |
-| Epsilon | 从 `1.0` 线性降至 `0.01`，默认衰减 `7500` 局 |
+| 经验回放 | proportional PER（可用 `--no-PER` 切换为均匀回放） |
+| Epsilon | 从 `1.0` 线性降至 `0.01`，在 `15000` 局内完成衰减 |
 | 隐藏层宽度 | `256` |
 | CNN 主干/投影通道 | `32 / 8` |
 | 残差块 dilation | `1, 1, 2` |
 | Target network 同步间隔 | `1000` 次学习更新 |
-| 周期验证单局步数上限 | `1000` |
+| 早停 | 开启；最少训练 `15000` 局后生效，可用 `--no-early-stop` 关闭 |
+| 周期验证 | 每 `1000` 局；quick/confirmation 为 `100 / 500` 局，单局上限 `2000` 步 |
 
 默认值以 [config.py](src/snake_ai/config.py) 和命令行解析函数为准；可执行下面的命令查看完整参数：
 
@@ -163,10 +166,10 @@ bash scripts/train_autodl.sh \
 uv run --extra cu124 python -m snake_ai.train --n-step 3
 ```
 
-DQN 默认使用均匀经验回放。显式加入 `--PER` 后启用 proportional PER；新经验以当前最大优先级写入，采样使用 Sum Tree，Huber loss 使用 importance-sampling 权重，并根据 Double DQN TD error 更新优先级。默认参数为 `alpha=0.6`、`beta=0.4` 线性退火至 `1.0`（100,000 次学习更新）、`epsilon=1e-6`：
+DQN 默认使用 proportional PER；新经验以当前最大优先级写入，采样使用 Sum Tree，Huber loss 使用 importance-sampling 权重，并根据 Double DQN TD error 更新优先级。默认参数为 `alpha=0.6`、`beta=0.4` 线性退火至 `1.0`（100,000 次学习更新）、`epsilon=1e-6`。如需均匀经验回放，可传入：
 
 ```bash
-uv run --extra cu124 python -m snake_ai.train --PER
+uv run --extra cu124 python -m snake_ai.train --no-PER
 ```
 
 `--PER` 是 DQN 专属参数，与 `--algorithm ppo` 同时使用会直接报错。
@@ -414,12 +417,12 @@ runs/<run_name>/events...train
 
 - `latest.pt` 保存最近的训练状态。
 - Epsilon 首次到达下限时，运行 100 局 quick 与 500 局 confirmation 验证，并建立首个 best。
-- 之后默认每 500 个训练 episode 运行 quick；通过筛选后才进入 confirmation。
-- quick 和 confirmation 默认每局最多执行 `1000` 步，可用 `--validation-max-steps` 修改；提前碰撞、饿死或占满棋盘仍会立即结束。
+- 之后默认每 1000 个训练 episode 运行 quick；通过筛选后才进入 confirmation。
+- quick 和 confirmation 默认每局最多执行 `2000` 步，可用 `--validation-max-steps` 修改；提前碰撞、饿死或占满棋盘仍会立即结束。
 - quick/confirmation 的均分差先除以各自棋盘满分，再换算为6×6满分33的等价分差；
   因此同一套选拔阈值可以用于不同网格。6×6直接使用原始均分差，行为与历史实现一致。
 - 验证使用独立环境、固定且互不重叠的逐局种子，不写 replay buffer，也不改变训练网络状态。
-- 训练默认不开启早停。传入 `--early-stop` 后，达到 `--min-episodes` 才累计 patience；达到目标确认均分或连续多轮无确认提升时才停止。
+- 训练默认开启早停；达到 `--min-episodes`（默认 15000）后才累计 patience。达到目标确认均分或连续多轮无确认提升时停止；传入 `--no-early-stop` 可改为跑满最大训练局数。
 - `config.json` 和 checkpoint 的 `run_config` 保存环境、奖励、训练、网络和验证配置。
 
 ## 评估

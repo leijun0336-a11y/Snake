@@ -88,8 +88,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--PER",
         dest="per",
-        action="store_true",
-        help="enable prioritized experience replay for DQN (default: disabled)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="enable prioritized experience replay for DQN (default: enabled for DQN)",
     )
     parser.add_argument("--epsilon-start", type=float, default=TrainConfig.epsilon_start)
     parser.add_argument("--epsilon-end", type=float, default=TrainConfig.epsilon_end)
@@ -160,15 +161,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="use second/third-ranked actions when deterministic evaluation repeats a state",
     )
-    # 默认严格跑满最大训练局数；显式传入该参数后才启用早停。
-    parser.add_argument("--early-stop", action="store_true")
+    # 默认启用早停；可通过 --no-early-stop 跑满最大训练局数。
+    parser.add_argument("--early-stop", action=argparse.BooleanOptionalAction, default=True)
     # 至少训练多少局后，才允许基于阶段验证的早停判断生效。
-    parser.add_argument("--min-episodes", type=int, default=5000)
-    parser.add_argument("--validation-interval", type=int, default=500)
+    parser.add_argument("--min-episodes", type=int, default=15000)
+    parser.add_argument("--validation-interval", type=int, default=1000)
     parser.add_argument("--validation-episodes", type=int, default=100)
     parser.add_argument("--confirmation-episodes", type=int, default=500)
     parser.add_argument("--validation-patience", type=int, default=8)
-    parser.add_argument("--validation-max-steps", type=int, default=1000)
+    parser.add_argument("--validation-max-steps", type=int, default=2000)
     # 如果设置了目标平均分，确认验证达到该值后停止训练。
     parser.add_argument("--target-mean-score", type=float, default=None)
     return parser.parse_args()
@@ -233,8 +234,9 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("CNN channel sizes must be positive")
     if any(dilation <= 0 for dilation in args.cnn_dilations):
         raise ValueError("cnn_dilations must contain positive integers")
+    per = TrainConfig.per if args.per is None and args.algorithm == "dqn" else bool(args.per)
     if args.algorithm == "ppo":
-        if args.per:
+        if args.per is True:
             raise ValueError("--PER is only available with --algorithm dqn")
         if args.ppo_rollout_steps < 1:
             raise ValueError("ppo_rollout_steps must be at least 1")
@@ -267,7 +269,7 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         n_step=args.n_step,
         learning_rate=args.learning_rate,
         replay_buffer_size=args.replay_buffer_size,
-        per=args.per,
+        per=per,
         epsilon_start=args.epsilon_start,
         epsilon_end=args.epsilon_end,
         epsilon_exp_decay=args.epsilon_exp_decay,

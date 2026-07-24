@@ -16,23 +16,26 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     train_config, env_config = build_configs(parse_args())
 
     assert train_config.max_steps_per_episode is None
-    assert train_config.epsilon_linear_episodes == 7500
+    assert train_config.episodes == 40_000
+    assert train_config.epsilon_linear_episodes == 15_000
     assert env_config.width == 6
     assert env_config.height == 6
     args = parse_args()
-    assert args.validation_interval == 500
+    assert args.early_stop is True
+    assert args.min_episodes == 15_000
+    assert args.validation_interval == 1000
     assert args.validation_episodes == 100
     assert args.confirmation_episodes == 500
     assert args.validation_patience == 8
-    assert args.validation_max_steps == 1000
+    assert args.validation_max_steps == 2000
     assert args.wandb is False
     assert args.n_step == 1
     assert train_config.n_step == 1
     assert train_config.learning_rate == pytest.approx(1e-4)
     assert args.learning_rate == pytest.approx(1e-4)
     assert args.algorithm == "dqn"
-    assert args.per is False
-    assert train_config.per is False
+    assert args.per is None
+    assert train_config.per is True
     assert TRAINING_START_DELAY_SECONDS == 5
 
 
@@ -51,14 +54,15 @@ def test_ppo_config_uses_aligned_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     assert ppo_config.target_kl == pytest.approx(0.02)
     assert ppo_config.entropy_coefficient == pytest.approx(0.05)
     assert ppo_config.entropy_coefficient_end == pytest.approx(0.001)
-    assert ppo_config.entropy_anneal_episodes == train_config.episodes == 15_000
+    assert train_config.episodes == 40_000
+    assert ppo_config.entropy_anneal_episodes == 15_000
     assert args.argmax_cycle_fallback is False
 
 
 @pytest.mark.parametrize(
     "extra_args, expected",
     [
-        (["--max-episodes", "40000"], 40_000),
+        (["--max-episodes", "40000"], 15_000),
         (
             ["--max-episodes", "40000", "--early-stop", "--min-episodes", "15000"],
             15_000,
@@ -124,6 +128,14 @@ def test_build_configs_enables_per_only_when_requested(monkeypatch: pytest.Monke
     assert train_config.per is True
     assert train_config.per_alpha == pytest.approx(0.6)
     assert train_config.per_beta_start == pytest.approx(0.4)
+
+
+def test_build_configs_can_disable_default_per(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--no-PER"])
+
+    train_config, _ = build_configs(parse_args())
+
+    assert train_config.per is False
 
 
 def test_build_configs_rejects_per_for_ppo(monkeypatch: pytest.MonkeyPatch) -> None:

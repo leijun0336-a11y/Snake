@@ -144,7 +144,7 @@ class EnvConfig:
 
 @dataclass(frozen=True)
 class TrainConfig:
-    episodes: int = 15000
+    episodes: int = 40000
     # 实际不在这里生效，而是在train.py中的代码中设置的。
     max_steps_per_episode: int | None = 500
     batch_size: int = 128
@@ -153,8 +153,8 @@ class TrainConfig:
     n_step: int = 1
     learning_rate: float = 1e-4
     replay_buffer_size: int = 100_000
-    # PER 默认关闭；启用后使用 proportional priority 和线性退火的 IS 权重。
-    per: bool = False
+    # 默认使用 proportional PER；可通过 --no-PER 切换为均匀经验回放。
+    per: bool = True
     per_alpha: float = 0.6
     per_beta_start: float = 0.4
     per_beta_anneal_steps: int = 100_000
@@ -165,8 +165,8 @@ class TrainConfig:
     epsilon_exp_decay: bool = False
     # 指数衰减模式下，每局结束后 epsilon 乘以的系数。
     epsilon_exp_factor: float = 0.995
-    # 线性衰减到 epsilon_end 所用局数；None 表示训练时取最大局数的一半。
-    epsilon_linear_episodes: int | None = None
+    # 线性衰减到 epsilon_end 所用局数。
+    epsilon_linear_episodes: int | None = 15_000
     target_update_interval: int = 1000
     hidden_size: int = 256
     cnn_channels: int = 32
