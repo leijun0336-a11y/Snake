@@ -14,11 +14,11 @@ uv run --extra cpu snake-play
 
 ## 当前默认配置
 
-直接运行 `python -m snake_ai.train` 时使用以下主要默认值：
+训练入口在使用 GPU 训练环境（`uv run --extra cu124 python -m snake_ai.train`）时，使用以下主要默认值：
 
 | 项目 | 默认值 |
 |---|---:|
-| 棋盘 | `20 × 20` |
+| 棋盘 | `6 × 6` |
 | 状态模式 | `hybrid` |
 | 奖励配置 | `experiment8` |
 | 势函数进度奖励 | 开启，可用 `--no-potential-reward` 关闭 |
@@ -69,14 +69,20 @@ scripts/
 
 ## 安装与测试
 
-项目要求 Python 3.12+。游戏环境与 GPU 训练环境使用互斥的 PyTorch 依赖，避免训练时误用 CPU 版。只运行游戏、加载 checkpoint 和进行 AI 推理时选择 `cpu`：
+项目要求 Python 3.12+。游戏环境与 GPU 训练环境使用互斥的 PyTorch 依赖，避免训练时误用 CPU 版。
+
+- 只运行游戏、加载 checkpoint、观看 AI 或进行评估推理时，使用 `--extra cpu`；
+- 使用 NVIDIA GPU 训练时，使用 `--extra cu124`；训练代码会检查 CUDA 是否可用，不能使用 CPU 版 Torch 替代；
+- 已经通过某一种 extra 创建好虚拟环境后，后续命令仍建议显式保留对应的 `--extra`，以保证依赖选择与用途一致。
+
+只运行游戏、加载 checkpoint 和进行 AI 推理时：
 
 ```bash
 uv sync --extra cpu
 uv run --extra cpu pytest
 ```
 
-> **PyTorch 版本说明：**只运行游戏时使用 `cpu` 即可；当前 AutoDL 训练使用 CUDA 12.4 对应的 `cu124`，两者不能同时选择。训练脚本会执行 CUDA 检查；检查失败时直接停止，不会退回 CPU 训练。
+> **PyTorch 版本说明：**当前 AutoDL 训练使用 CUDA 12.4 对应的 `cu124`，`cpu` 与 `cu124` 不能同时选择。训练时 CUDA 检查失败会直接停止，不会退回 CPU 训练。
 
 ```bash
 uv sync --extra cu124
@@ -104,7 +110,7 @@ uv run --extra cpu python -m snake_ai.game.game_app
 
 竞速模式使用相同初始状态和逻辑时钟。双方第 `n` 个食物由相同的比赛 seed 与进食序号生成同源候选排列，首个合法格作为各自食物；先达到棋盘满分者获胜。`6 × 6` 棋盘共 36 格、初始蛇长 3，因此满分为 33。碰撞者失败，400 step 后仍未满分则按分数和取得最终分数的先后顺序裁决。
 
-当前唯一 AI 固定加载 `checkpoints/dqn_20260715_091735/best.pt`。加载过程严格校验棋盘、状态模式、奖励配置、网络类型和 checkpoint 架构；文件缺失或配置不匹配时会明确报错，不会切换到其他权重。
+当前唯一 AI（ID：`dqn_20260722_201922`）固定加载 `checkpoints/dqn_20260722_201922/best.pt`。加载过程严格校验棋盘、状态模式、奖励配置和 checkpoint 架构；文件缺失或配置不匹配时会明确报错，不会切换到其他权重。
 
 AI checkpoint 会在主菜单首帧显示后于后台预加载；首次点击 AI 模式时若尚未完成，会显示加载界面，避免阻塞主菜单响应。
 
