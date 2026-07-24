@@ -299,7 +299,7 @@ def build_ppo_config(args: argparse.Namespace) -> PPOConfig:
         entropy_coefficient=args.ppo_entropy_coefficient,
         entropy_coefficient_end=args.ppo_entropy_coefficient_end,
         entropy_anneal_episodes=(
-            args.max_episodes
+            (args.min_episodes if args.early_stop else args.max_episodes)
             if args.ppo_entropy_anneal_episodes is None
             else args.ppo_entropy_anneal_episodes
         ),

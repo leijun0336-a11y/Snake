@@ -55,6 +55,40 @@ def test_ppo_config_uses_aligned_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     assert args.argmax_cycle_fallback is False
 
 
+@pytest.mark.parametrize(
+    "extra_args, expected",
+    [
+        (["--max-episodes", "40000"], 40_000),
+        (
+            ["--max-episodes", "40000", "--early-stop", "--min-episodes", "15000"],
+            15_000,
+        ),
+        (
+            [
+                "--max-episodes",
+                "40000",
+                "--early-stop",
+                "--min-episodes",
+                "15000",
+                "--ppo-entropy-anneal-episodes",
+                "23000",
+            ],
+            23_000,
+        ),
+    ],
+)
+def test_ppo_entropy_anneal_default_follows_stop_mode(
+    extra_args: list[str],
+    expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--algorithm", "ppo", *extra_args])
+    args = parse_args()
+    build_configs(args)
+
+    assert build_ppo_config(args).entropy_anneal_episodes == expected
+
+
 def test_ppo_rollout_must_be_divisible_by_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sys,

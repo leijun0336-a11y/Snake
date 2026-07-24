@@ -122,7 +122,7 @@ uv run --extra cu124 python -m snake_ai.train
 uv run --extra cu124 python -m snake_ai.train --algorithm ppo --reward-profile experiment_ppo
 ```
 
-PPO 默认使用 `2048` 步 rollout、`128` minibatch、`4` 个 update epochs、`GAE λ=0.95`、`clip=0.2` 和 `target KL=0.02`。entropy coefficient 从首局的 `0.05` 线性退火到末局的 `0.001`；可用 `--ppo-entropy-anneal-episodes` 单独指定退火局数。`experiment_ppo` 的进食奖励为 `4.0`，碰撞惩罚保持 `-4.0`。公共 `--learning-rate` 默认仍为 `1e-4`。
+PPO 默认使用 `2048` 步 rollout、`128` minibatch、`4` 个 update epochs、`GAE λ=0.95`、`clip=0.2` 和 `target KL=0.02`。entropy coefficient 从首局的 `0.05` 线性退火到 `0.001`：未开启早停时默认在 `max-episodes` 结束退火，开启早停时默认在 `min-episodes` 结束退火；可用 `--ppo-entropy-anneal-episodes` 显式覆盖。`experiment_ppo` 的进食奖励为 `4.0`，碰撞惩罚保持 `-4.0`。公共 `--learning-rate` 默认仍为 `1e-4`。
 
 按最新一次 10×10 实验配置运行 PPO（仅替换算法和算法专属参数，学习率采用当前公共默认值）：
 
@@ -142,7 +142,6 @@ bash scripts/train_autodl.sh \
   --ppo-value-clip-coefficient 0.2 \
   --ppo-entropy-coefficient 0.05 \
   --ppo-entropy-coefficient-end 0.001 \
-  --ppo-entropy-anneal-episodes 40000 \
   --ppo-value-loss-coefficient 0.5 \
   --ppo-max-grad-norm 0.5 --ppo-target-kl 0.02 \
   --early-stop --min-episodes 15000 \
