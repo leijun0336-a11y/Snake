@@ -93,6 +93,7 @@ class PPOAgent:
         entropy_coefficient: float = 0.05,
         entropy_coefficient_end: float = 0.001,
         entropy_anneal_episodes: int = 15_000,
+        # 评估模式中，防止转圈的兜底机制
         argmax_cycle_fallback: bool = False,
         value_loss_coefficient: float = 0.5,
         max_grad_norm: float = 0.5,
@@ -179,6 +180,8 @@ class PPOAgent:
             cnn_dilations=self.cnn_dilations,
         ).to(self.device)
 
+    # PPO的动作采样，训练时输出概率分布，基于概率分布随机采样。
+    # 评估时采用确定性采样，直接采样概率最高的；如果开启兜底则强制避免绕圈。
     def act(self, state: Any, training: bool = True) -> int:
         with torch.no_grad():
             logits, _ = self.policy_net(self._state_batch_to_tensor([state]))
@@ -197,9 +200,9 @@ class PPOAgent:
             fallback_rank = 1 + (previous_visits - 1) % (self.action_size - 1)
             return int(ranked_actions[fallback_rank].item())
 
+    # 负责每局线性退火的 entropy coefficient
     def set_entropy_for_episode(self, episode: int) -> float:
-        """Linearly anneal entropy from the first to the configured final episode."""
-
+        
         if episode < 1:
             raise ValueError("episode must be at least 1")
         if self.entropy_anneal_episodes == 1:
@@ -214,13 +217,16 @@ class PPOAgent:
         )
         return self.entropy_coefficient
 
+    # 专门给cycle_fallback的工具函数。
     def reset_evaluation_state(self) -> None:
         self._evaluation_state_visits.clear()
 
+    # # 专门给cycle_fallback的工具函数。
     def _evaluation_state_key(self, state: Any) -> bytes:
         parts = state if self.state_mode == "hybrid" else (state,)
         return b"".join(np.ascontiguousarray(part, dtype=np.float32).tobytes() for part in parts)
 
+    # 装一个transition到rollout buffer中。
     def remember(
         self,
         state: Any,
@@ -229,6 +235,8 @@ class PPOAgent:
         next_state: Any,
         done: bool,
     ) -> None:
+        # 这段在补算 act() 时被丢弃的两个关键值。
+        # act() 也调了一次 policy_net，拿到了 logits 和 value，但它只用了 logits（采样或 argmax），value 直接扔掉了。
         with torch.no_grad():
             logits, value = self.policy_net(self._state_batch_to_tensor([state]))
             distribution = Categorical(logits=logits)
@@ -259,12 +267,18 @@ class PPOAgent:
             self.rollout[-1].episode_end = True
 
     def learn(self) -> PPOMetrics | None:
+        # ① Rollout buffer 还没攒够，不更新
         if len(self.rollout) < self.rollout_steps:
             return None
 
+        # ② 取出固定长度的轨迹并释放内存
         batch = self.rollout[: self.rollout_steps]
         del self.rollout[: self.rollout_steps]
+
+        # ③ 用 GAE 计算优势函数和 returns（returns = advantage + value）
         advantages, returns = self._calculate_gae(batch)
+
+        # ④ 将 batch 中的各项数据转换为 GPU tensor
         states = self._state_batch_to_tensor([item.state for item in batch])
         actions = torch.tensor(
             [item.action for item in batch], dtype=torch.long, device=self.device
@@ -277,6 +291,8 @@ class PPOAgent:
         )
         advantages_tensor = torch.tensor(advantages, dtype=torch.float32, device=self.device)
         returns_tensor = torch.tensor(returns, dtype=torch.float32, device=self.device)
+
+        # ⑤ 归一化：z-score 后 advantage 均值为 0、returns 均值为 0，使 loss 跨 batch 稳定
         if self.normalize_returns and len(batch) > 1:
             ret_mean = returns_tensor.mean()
             ret_std = returns_tensor.std(unbiased=False) + 1e-8
@@ -286,6 +302,7 @@ class PPOAgent:
                 advantages_tensor.std(unbiased=False) + 1e-8
             )
 
+        # ⑥ 多 epoch、minibatch 的 PPO 更新循环
         totals = {
             "loss": 0.0,
             "policy_loss": 0.0,
@@ -299,15 +316,21 @@ class PPOAgent:
         stop_for_kl = False
 
         for epoch in range(self.update_epochs):
+            # 每个 epoch 重新打乱样本顺序
             indices = torch.randperm(len(batch), device=self.device)
             for start in range(0, len(batch), self.batch_size):
                 minibatch_indices = indices[start : start + self.batch_size]
                 minibatch_states = self._index_state_batch(states, minibatch_indices)
+
+                # ---- 前向传播 ----
                 logits, new_values = self.policy_net(minibatch_states)
                 distribution = Categorical(logits=logits)
                 new_log_probs = distribution.log_prob(actions[minibatch_indices])
+                # 策略熵,减去策略熵等价于鼓励高熵，也就是高多样性高探索。
                 entropy = distribution.entropy().mean()
 
+                # ---- PPO clipped policy loss ----
+                # ratio = π_new(a|s) / π_old(a|s)，截断到 [1-ε, 1+ε]
                 log_ratio = new_log_probs - old_log_probs[minibatch_indices]
                 ratio = log_ratio.exp()
                 minibatch_advantages = advantages_tensor[minibatch_indices]
@@ -316,8 +339,11 @@ class PPOAgent:
                     1.0 - self.clip_coefficient,
                     1.0 + self.clip_coefficient,
                 )
+                # max 保证：advantage>0 时取保守目标，advantage<0 时取悲观目标
                 policy_loss = torch.maximum(unclipped_policy_loss, clipped_policy_loss).mean()
 
+                # ---- PPO clipped value loss ----
+                # V_new 相对 V_old 的变化量截断到 [-c, +c]
                 old_minibatch_values = old_values[minibatch_indices]
                 minibatch_returns = returns_tensor[minibatch_indices]
                 unclipped_value_loss = (new_values - minibatch_returns).pow(2)
@@ -327,19 +353,25 @@ class PPOAgent:
                 )
                 clipped_value_loss = (clipped_values - minibatch_returns).pow(2)
                 value_loss = 0.5 * torch.maximum(unclipped_value_loss, clipped_value_loss).mean()
+
+                # ---- 总损失 = 策略损失 + 价值损失 - 熵奖励 ----
                 loss = (
                     policy_loss
                     + self.value_loss_coefficient * value_loss
                     - self.entropy_coefficient * entropy
                 )
 
+                # ---- 反向传播 ----
                 self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
+                # ---- 诊断指标（不参与梯度） ----
                 with torch.no_grad():
+                    # 近似 KL 散度 ≈ E[(r-1) - ln(r)]
                     approx_kl = ((ratio - 1.0) - log_ratio).mean()
+                    # ratio 超出截断边界的样本比例
                     clip_fraction = ((ratio - 1.0).abs() > self.clip_coefficient).float().mean()
                 values = {
                     "loss": loss,
@@ -353,6 +385,7 @@ class PPOAgent:
                     totals[name] += float(value_tensor.item())
                 minibatches += 1
 
+                # KL 早停：策略变化过大时跳过剩余 epoch
                 if self.target_kl is not None and float(approx_kl.item()) > self.target_kl:
                     stop_for_kl = True
                     break
@@ -361,6 +394,8 @@ class PPOAgent:
                 break
 
         self.update_steps += 1
+
+        # ⑦ explained_variance：Critic 对 returns 方差的解释比例，越接近 1 越好
         with torch.no_grad():
             _, final_values = self.policy_net(states)
             return_variance = torch.var(returns_tensor, unbiased=False)
@@ -370,6 +405,8 @@ class PPOAgent:
                 else 1.0
                 - torch.var(returns_tensor - final_values, unbiased=False) / return_variance
             )
+
+        # ⑧ 汇总所有 minibatch 的平均指标
         divisor = max(minibatches, 1)
         return PPOMetrics(
             loss=totals["loss"] / divisor,

@@ -15,6 +15,7 @@ class RewardConfig:
     name: str
     # 是否启用势函数进度奖励：beta * (gamma * new_phi - old_phi)。
     # old_phi 和 new_phi 分别为移动前后棋盘状态的势函数值，gamma 为折扣因子。
+    # phi(head, food) = 1.0 - (|food.x - head.x| + |food.y - head.y|) / ((width - 1) + (height - 1))
     potential_reward: bool
     # 是否启用步成本和饥饿成本；开启时饿死使用 starvation_penalty，不同于撞死的数值。
     # 关闭时饿死和撞死的惩罚相同。
@@ -25,7 +26,7 @@ class RewardConfig:
     food_reward: float
     # 蛇头撞墙或撞到身体时的终止惩罚。
     collision_penalty: float
-    # 超过无进食步数上限时的终止惩罚；仅在 cost_rewards 开启时使用。
+    # 超过无进食步数上限时的终止惩罚；仅在 cost_rewards 开启时使用。通常与网格大小和蛇长相关。
     starvation_penalty: float
     # 蛇占满棋盘时获得的终止奖励。
     win_reward: float
@@ -144,6 +145,7 @@ class EnvConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     episodes: int = 15000
+    # 实际不在这里生效，而是在train.py中的代码中设置的。
     max_steps_per_episode: int | None = 500
     batch_size: int = 128
     gamma: float = 0.99
@@ -179,13 +181,19 @@ class PPOConfig:
     rollout_steps: int = 2048
     update_epochs: int = 4
     gae_lambda: float = 0.95
+    # PPO 对重要性采样比值的 clip range，通常在 0.1~0.3 之间。
     clip_coefficient: float = 0.2
+    # PPO 对价值函数的 clip range，通常在 0.1~0.3 之间。价值也会间接影响策略。
     value_clip_coefficient: float = 0.2
+    # PPO的策略熵初始值。
     entropy_coefficient: float = 0.05
+    # PPO策略熵衰减后的最终值。
     entropy_coefficient_end: float = 0.001
+    # PPO策略熵线性衰减到什么位置。
     entropy_anneal_episodes: int | None = None
     value_loss_coefficient: float = 0.5
     max_grad_norm: float = 0.5
+    # 每个 epoch 末尾检查，若 approx_kl > target_kl 则跳过剩余 epoch（即使还没跑满 update_epochs 轮）
     target_kl: float | None = 0.02
     normalize_advantage: bool = True
     normalize_returns: bool = True
