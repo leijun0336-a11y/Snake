@@ -13,6 +13,7 @@ from snake_ai.game.ai_profiles import DEFAULT_AI_ID, get_ai_profile
 from snake_ai.game.controllers import ControlContext, DQNController, HumanController
 from snake_ai.game.food_policy import SeededRaceFoodPolicy
 from snake_ai.game.game_app import AppScene, GameSettings, ModeName, SnakeGameApp
+from snake_ai.game.modes.ai_viewer import AIViewerMode
 from snake_ai.game.modes.race import RaceMode, RaceResult
 from snake_ai.game.session import GameSession
 from snake_ai.game.snake_env import Direction, Point, SnakeEnv
@@ -330,6 +331,11 @@ def test_default_ai_profile_strictly_loads_selected_checkpoint() -> None:
 
     assert profile.checkpoint_path.name == "best.pt"
     assert action in (0, 1, 2)
+
+    viewer = AIViewerMode.create(profile, controller, seed=1, tick_rate=6)
+    race = RaceMode.create(profile, controller, race_seed=1, tick_rate=6)
+    assert viewer.ai_id == profile.id
+    assert race.ai_id == profile.id
 
 
 def test_ai_profile_mismatch_is_rejected_without_fallback() -> None:

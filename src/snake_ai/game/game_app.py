@@ -463,6 +463,7 @@ class SnakeGameApp:
                 pygame.Rect(650, 145, 380, 380),
                 accent=self.renderer.theme.ai,
                 label="AI",
+                subtitle=f"AI ID  {self.active_mode.ai_id}",
                 alpha=alpha,
                 elapsed=self.elapsed,
                 dt=dt,
@@ -479,9 +480,14 @@ class SnakeGameApp:
                 "single",
                 session.previous_snapshot,
                 session.snapshot,
-                pygame.Rect(340, 115, 440, 440),
+                pygame.Rect(340, 135, 420, 420),
                 accent=accent,
                 label=label,
+                subtitle=(
+                    f"AI ID  {self.active_mode.ai_id}"
+                    if isinstance(self.active_mode, AIViewerMode)
+                    else None
+                ),
                 alpha=alpha,
                 elapsed=self.elapsed,
                 dt=dt,

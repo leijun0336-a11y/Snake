@@ -68,6 +68,7 @@ class GameRenderer:
         alpha: float,
         elapsed: float,
         dt: float,
+        subtitle: str | None = None,
     ) -> None:
         import pygame
 
@@ -97,7 +98,18 @@ class GameRenderer:
         self._update_and_draw_particles(key, dt)
 
         hud_y = board.bottom + 34
-        self.text(label, (board.centerx, board.top - 34), color=accent)
+        self.text(
+            label,
+            (board.centerx, board.top - 46 if subtitle else board.top - 34),
+            color=accent,
+        )
+        if subtitle:
+            self.text(
+                subtitle,
+                (board.centerx, board.top - 20),
+                font=self.font_small,
+                color=self.theme.muted_text,
+            )
         self.text(
             f"SCORE  {current.score}     STEPS  {current.steps}",
             (board.centerx, hud_y),

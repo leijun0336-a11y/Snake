@@ -9,8 +9,9 @@ from snake_ai.game.snake_env import SnakeEnv
 
 
 class AIViewerMode:
-    def __init__(self, session: GameSession) -> None:
+    def __init__(self, session: GameSession, ai_id: str) -> None:
         self.session = session
+        self.ai_id = ai_id
 
     @classmethod
     def create(
@@ -37,7 +38,8 @@ class AIViewerMode:
                 tick_rate=tick_rate,
                 seed=seed,
                 max_steps=400,
-            )
+            ),
+            profile.id,
         )
 
     @property

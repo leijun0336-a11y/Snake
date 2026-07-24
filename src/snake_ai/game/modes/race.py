@@ -63,11 +63,13 @@ class RaceMode:
         ai_session: GameSession,
         *,
         max_steps: int = 400,
+        ai_id: str = "AI",
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be positive")
         self.player_session = player_session
         self.ai_session = ai_session
+        self.ai_id = ai_id
         player_full_score = self._full_score(player_session)
         ai_full_score = self._full_score(ai_session)
         if player_full_score != ai_full_score:
@@ -123,6 +125,7 @@ class RaceMode:
                 seed=race_seed,
             ),
             max_steps=max_steps,
+            ai_id=profile.id,
         )
 
     @property

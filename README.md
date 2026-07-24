@@ -94,8 +94,8 @@ uv run --extra cpu python -m snake_ai.game.game_app
 首版固定使用 `6 × 6` 棋盘，提供三种模式：
 
 - `PLAY SOLO`：玩家单人游戏；
-- `WATCH AI`：观察当前内置 AI 自动游戏；
-- `HUMAN VS AI`：玩家和 AI 在双棋盘中进行公平竞速；
+- `WATCH AI`：观察当前内置 AI 自动游戏，并显示其 AI ID；
+- `HUMAN VS AI`：玩家和 AI 在双棋盘中进行公平竞速，并显示 AI ID；
 - `RULES`：在游戏内查看完整规则与操作。
 
 玩家使用方向键或 `WASD` 转向，`P` 或 `Esc` 暂停。玩家模式开局前有 3 秒倒计时，倒计时期间也可以提前输入方向；直接反向的按键会按贪吃蛇规则忽略。规则页可以从主菜单或暂停菜单进入；设置页使用上下方向键或界面的 `+/-` 按钮，在 1～20 tick/s 间以 1 tick/s 为步长调整逻辑速度（默认 6 tick/s），也可以开关声音。渲染固定为 60 FPS，局内只显示 Score 和 Steps，所有可视化单局最多运行 400 step。
