@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     # 不传时默认加载 checkpoints 下时间最新的 DQN/PPO 实验。
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--algorithm", choices=("dqn", "ppo"), default=None)
-    parser.add_argument("--episodes", type=int, default=1000)
+    parser.add_argument("--episodes", type=int, default=2000)
     # 防止转圈。
     parser.add_argument("--max-steps", type=int, default=1000)
     parser.add_argument(
