@@ -26,6 +26,8 @@ class ActorCriticNetwork(QNetwork):
         cnn_channels: int = 32,
         cnn_output_channels: int = 8,
         cnn_dilations: tuple[int, ...] = (1, 1, 2),
+        local_crop_size: int = QNetwork.DEFAULT_LOCAL_CROP_SIZE,
+        use_local_crop: bool = True,
     ) -> None:
         super().__init__(
             input_size,
@@ -37,6 +39,8 @@ class ActorCriticNetwork(QNetwork):
             cnn_channels=cnn_channels,
             cnn_output_channels=cnn_output_channels,
             cnn_dilations=cnn_dilations,
+            local_crop_size=local_crop_size,
+            use_local_crop=use_local_crop,
         )
 
     def forward(
@@ -105,6 +109,8 @@ class PPOAgent:
         cnn_channels: int = 32,
         cnn_output_channels: int = 8,
         cnn_dilations: tuple[int, ...] = (1, 1, 2),
+        local_crop_size: int = QNetwork.DEFAULT_LOCAL_CROP_SIZE,
+        use_local_crop: bool = True,
         seed: int = 42,
         device: str | None = None,
     ) -> None:
@@ -159,6 +165,8 @@ class PPOAgent:
         self.cnn_channels = cnn_channels
         self.cnn_output_channels = cnn_output_channels
         self.cnn_dilations = tuple(cnn_dilations)
+        self.local_crop_size = local_crop_size
+        self.use_local_crop = use_local_crop
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self.update_steps = 0
 
@@ -178,6 +186,8 @@ class PPOAgent:
             cnn_channels=self.cnn_channels,
             cnn_output_channels=self.cnn_output_channels,
             cnn_dilations=self.cnn_dilations,
+            local_crop_size=self.local_crop_size,
+            use_local_crop=self.use_local_crop,
         ).to(self.device)
 
     # PPO的动作采样，训练时输出概率分布，基于概率分布随机采样。
@@ -479,6 +489,8 @@ class PPOAgent:
             "cnn_channels": self.cnn_channels,
             "cnn_output_channels": self.cnn_output_channels,
             "cnn_dilations": self.cnn_dilations,
+            "local_crop_size": self.local_crop_size,
+            "use_local_crop": self.use_local_crop,
             "hidden_size": self.hidden_size,
             "action_size": self.action_size,
             "architecture_version": self.ARCHITECTURE_VERSION,
@@ -547,6 +559,8 @@ class PPOAgent:
             int(checkpoint["cnn_channels"]),
             int(checkpoint["cnn_output_channels"]),
             tuple(int(value) for value in checkpoint["cnn_dilations"]),
+            int(checkpoint.get("local_crop_size", QNetwork.LEGACY_LOCAL_CROP_SIZE)),
+            bool(checkpoint.get("use_local_crop", True)),
         )
         current_architecture = (
             self.hidden_size,
@@ -554,6 +568,8 @@ class PPOAgent:
             self.cnn_channels,
             self.cnn_output_channels,
             self.cnn_dilations,
+            self.local_crop_size,
+            self.use_local_crop,
         )
         if architecture != current_architecture:
             (
@@ -562,6 +578,8 @@ class PPOAgent:
                 self.cnn_channels,
                 self.cnn_output_channels,
                 self.cnn_dilations,
+                self.local_crop_size,
+                self.use_local_crop,
             ) = architecture
             self.policy_net = self._build_network()
             self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)

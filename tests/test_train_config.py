@@ -36,6 +36,10 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.algorithm == "dqn"
     assert args.per is None
     assert train_config.per is True
+    assert args.local_crop_size == 3
+    assert train_config.local_crop_size == 3
+    assert args.use_local_crop is True
+    assert train_config.use_local_crop is True
     assert TRAINING_START_DELAY_SECONDS == 5
 
 
@@ -102,6 +106,27 @@ def test_ppo_rollout_must_be_divisible_by_batch(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(ValueError, match="divisible"):
         build_configs(parse_args())
+
+
+@pytest.mark.parametrize("value", ["0", "2", "4", "-1"])
+def test_local_crop_size_must_be_positive_and_odd(
+    value: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--local-crop-size", value])
+
+    with pytest.raises(ValueError, match="positive odd"):
+        build_configs(parse_args())
+
+
+def test_local_crop_branch_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--no-local-crop"])
+
+    args = parse_args()
+    train_config, _ = build_configs(args)
+
+    assert args.use_local_crop is False
+    assert train_config.use_local_crop is False
 
 
 def test_parse_args_enables_wandb_only_when_requested(

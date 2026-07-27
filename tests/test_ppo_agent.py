@@ -129,6 +129,8 @@ def test_ppo_checkpoint_round_trip(tmp_path: Path) -> None:
         cnn_channels=8,
         cnn_output_channels=4,
         cnn_dilations=(1,),
+        local_crop_size=5,
+        use_local_crop=False,
         rollout_steps=4,
         batch_size=2,
         seed=1,
@@ -156,6 +158,41 @@ def test_ppo_checkpoint_round_trip(tmp_path: Path) -> None:
     assert loaded.cnn_channels == 8
     assert loaded.cnn_output_channels == 4
     assert loaded.cnn_dilations == (1,)
+    assert loaded.local_crop_size == 5
+    assert loaded.use_local_crop is False
+
+
+def test_legacy_ppo_checkpoint_without_crop_metadata_uses_historical_5x5(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "legacy_ppo.pt"
+    source = PPOAgent(
+        state_size=(9, 6, 6),
+        action_size=3,
+        state_mode="grid",
+        local_crop_size=5,
+        rollout_steps=4,
+        batch_size=2,
+        seed=1,
+    )
+    source.save(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint.pop("local_crop_size")
+    checkpoint.pop("use_local_crop")
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded = PPOAgent(
+        state_size=(9, 6, 6),
+        action_size=3,
+        state_mode="grid",
+        rollout_steps=4,
+        batch_size=2,
+        seed=2,
+    )
+    loaded.load(checkpoint_path)
+
+    assert loaded.local_crop_size == 5
+    assert loaded.use_local_crop is True
 
 
 def test_entropy_coefficient_anneals_linearly_to_configured_floor() -> None:

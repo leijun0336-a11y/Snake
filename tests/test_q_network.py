@@ -1,3 +1,4 @@
+import pytest
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -37,7 +38,12 @@ def _grid_with_heads(height: int, width: int) -> torch.Tensor:
     return grid
 
 
-def _network(height: int = 6, width: int = 6) -> QNetwork:
+def _network(
+    height: int = 6,
+    width: int = 6,
+    local_crop_size: int = 3,
+    use_local_crop: bool = True,
+) -> QNetwork:
     return QNetwork(
         input_size=(9, height, width),
         hidden_size=32,
@@ -46,17 +52,20 @@ def _network(height: int = 6, width: int = 6) -> QNetwork:
         cnn_channels=8,
         cnn_output_channels=4,
         cnn_dilations=(1,),
+        local_crop_size=local_crop_size,
+        use_local_crop=use_local_crop,
     )
 
 
-def test_direct_crop_matches_unfold_at_every_board_position() -> None:
+@pytest.mark.parametrize("local_crop_size", [1, 3, 5, 7])
+def test_direct_crop_matches_unfold_at_every_board_position(local_crop_size: int) -> None:
     torch.manual_seed(1)
     height = width = 6
-    network = _network(height, width)
+    network = _network(height, width, local_crop_size)
     grid = _grid_with_heads(height, width)
     features = torch.randn((height * width, 4, height, width))
 
-    expected = _unfold_crop(features, grid)
+    expected = _unfold_crop(features, grid, local_crop_size)
     actual = network._crop_around_head(features, grid)
 
     torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
@@ -69,7 +78,10 @@ def test_direct_crop_preserves_non_uniform_gradients() -> None:
     grid = _grid_with_heads(height, width)[[0, width - 1, width * (height - 1), -1, 17]]
     reference_features = torch.randn((len(grid), 4, height, width), requires_grad=True)
     direct_features = reference_features.detach().clone().requires_grad_(True)
-    upstream = torch.linspace(-1.0, 1.0, len(grid) * 4 * 25).reshape(len(grid), 4, 5, 5)
+    crop_size = network.local_crop_size
+    upstream = torch.linspace(-1.0, 1.0, len(grid) * 4 * crop_size**2).reshape(
+        len(grid), 4, crop_size, crop_size
+    )
 
     expected = _unfold_crop(reference_features, grid)
     actual = network._crop_around_head(direct_features, grid)
@@ -97,7 +109,7 @@ class _ReferenceQNetwork(QNetwork):
         features: torch.Tensor,
         grid: torch.Tensor,
     ) -> torch.Tensor:
-        return _unfold_crop(features, grid)
+        return _unfold_crop(features, grid, self.local_crop_size)
 
     def _spatial_features(self, grid: torch.Tensor) -> torch.Tensor:
         shared = self.cnn(grid)
@@ -132,3 +144,21 @@ def test_full_q_values_and_state_dict_remain_compatible() -> None:
         actual = current(grid)
 
     torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.parametrize("local_crop_size", [0, 2, 4, -1])
+def test_local_crop_size_requires_positive_odd_value(local_crop_size: int) -> None:
+    with pytest.raises(ValueError, match="positive odd"):
+        _network(local_crop_size=local_crop_size)
+
+
+def test_disabling_local_crop_removes_branch_and_local_features() -> None:
+    network = _network(height=6, width=7, use_local_crop=False)
+
+    assert network.use_local_crop is False
+    assert not hasattr(network, "local_projection")
+    assert not hasattr(network, "local_offsets")
+    assert network.feature[0].in_features == 4 * 6 * 7
+
+    grid = _grid_with_heads(6, 7)[[0, 41]]
+    assert network(grid).shape == (2, 3)

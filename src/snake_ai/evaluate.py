@@ -293,6 +293,8 @@ def main() -> None:
         cnn_channels=train_config.cnn_channels,
         cnn_output_channels=train_config.cnn_output_channels,
         cnn_dilations=train_config.cnn_dilations,
+        local_crop_size=train_config.local_crop_size,
+        use_local_crop=train_config.use_local_crop,
         seed=train_config.seed,
     )
     if algorithm == "ppo":

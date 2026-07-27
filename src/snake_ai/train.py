@@ -116,6 +116,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cnn-channels", type=int, default=TrainConfig.cnn_channels)
     parser.add_argument("--cnn-output-channels", type=int, default=TrainConfig.cnn_output_channels)
     parser.add_argument("--cnn-dilations", type=int, nargs="+", default=TrainConfig.cnn_dilations)
+    parser.add_argument(
+        "--local-crop-size",
+        type=int,
+        default=TrainConfig.local_crop_size,
+        help="odd side length of the head-centered local CNN crop (default: 3)",
+    )
+    parser.add_argument(
+        "--local-crop",
+        dest="use_local_crop",
+        action=argparse.BooleanOptionalAction,
+        default=TrainConfig.use_local_crop,
+        help="enable the head-centered local CNN branch (default: enabled)",
+    )
     parser.add_argument("--ppo-rollout-steps", type=int, default=PPOConfig.rollout_steps)
     parser.add_argument("--ppo-update-epochs", type=int, default=PPOConfig.update_epochs)
     parser.add_argument("--ppo-gae-lambda", type=float, default=PPOConfig.gae_lambda)
@@ -234,6 +247,8 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("CNN channel sizes must be positive")
     if any(dilation <= 0 for dilation in args.cnn_dilations):
         raise ValueError("cnn_dilations must contain positive integers")
+    if args.local_crop_size < 1 or args.local_crop_size % 2 == 0:
+        raise ValueError("local_crop_size must be a positive odd integer")
     per = TrainConfig.per if args.per is None and args.algorithm == "dqn" else bool(args.per)
     if args.algorithm == "ppo":
         if args.per is True:
@@ -280,6 +295,8 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         cnn_channels=args.cnn_channels,
         cnn_output_channels=args.cnn_output_channels,
         cnn_dilations=tuple(args.cnn_dilations),
+        local_crop_size=args.local_crop_size,
+        use_local_crop=args.use_local_crop,
         seed=args.seed,
     )
     env_config = EnvConfig(
@@ -495,6 +512,8 @@ def main() -> None:
         "cnn_channels": train_config.cnn_channels,
         "cnn_output_channels": train_config.cnn_output_channels,
         "cnn_dilations": train_config.cnn_dilations,
+        "local_crop_size": train_config.local_crop_size,
+        "use_local_crop": train_config.use_local_crop,
         "seed": train_config.seed,
     }
     if args.algorithm == "ppo":

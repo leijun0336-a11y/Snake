@@ -173,6 +173,9 @@ class TrainConfig:
     cnn_output_channels: int = 8
     # 三个卷积块中对应的膨胀率，分别为 1、1、2。
     cnn_dilations: tuple[int, ...] = (1, 1, 2)
+    # 以蛇头为中心的局部特征窗口边长，必须为正奇数。
+    local_crop_size: int = 3
+    use_local_crop: bool = True
     seed: int = 42
 
 

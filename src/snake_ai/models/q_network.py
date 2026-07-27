@@ -54,8 +54,10 @@ class QNetwork(nn.Module):
     # Grid 的 2、3、4、5 号通道分别是朝左、右、上、下的蛇头。
     # 将四个通道相加后，每个样本只应有一个值为 1 的蛇头位置。
     HEAD_CHANNEL_SLICE = slice(2, 6)
-    # 局部分支固定观察蛇头周围 5x5，即上下左右各两格。
-    LOCAL_CROP_SIZE = 5
+    DEFAULT_LOCAL_CROP_SIZE = 3
+    LEGACY_LOCAL_CROP_SIZE = 5
+    # 保留旧的类属性访问方式；实际网络使用实例级 local_crop_size。
+    LOCAL_CROP_SIZE = DEFAULT_LOCAL_CROP_SIZE
 
     def __init__(
         self,
@@ -68,6 +70,8 @@ class QNetwork(nn.Module):
         cnn_channels: int = 32,
         cnn_output_channels: int = 8,
         cnn_dilations: tuple[int, ...] = (1, 1, 2),
+        local_crop_size: int = DEFAULT_LOCAL_CROP_SIZE,
+        use_local_crop: bool = True,
     ) -> None:
         super().__init__()
         # 尽早检查架构参数，避免在第一次前向传播时才出现难以定位的形状错误。
@@ -79,9 +83,13 @@ class QNetwork(nn.Module):
             raise ValueError("cnn_dilations must contain positive integers")
         if auxiliary_size <= 0:
             raise ValueError("auxiliary_size must be positive")
+        if local_crop_size < 1 or local_crop_size % 2 == 0:
+            raise ValueError("local_crop_size must be a positive odd integer")
 
         self.dueling = dueling
         self.state_mode = state_mode
+        self.local_crop_size = local_crop_size
+        self.use_local_crop = use_local_crop
 
         if state_mode == "vector":
             # Vector 输入形状为 [B,20]，继续使用两层 MLP，作为低参数量基线。
@@ -126,26 +134,29 @@ class QNetwork(nn.Module):
                 nn.GroupNorm(branch_groups, cnn_output_channels),
                 nn.ReLU(),
             )
-            self.local_projection = nn.Sequential(
-                nn.Conv2d(cnn_channels, cnn_output_channels, kernel_size=1, bias=False),
-                nn.GroupNorm(branch_groups, cnn_output_channels),
-                nn.ReLU(),
-            )
+            if self.use_local_crop:
+                self.local_projection = nn.Sequential(
+                    nn.Conv2d(cnn_channels, cnn_output_channels, kernel_size=1, bias=False),
+                    nn.GroupNorm(branch_groups, cnn_output_channels),
+                    nn.ReLU(),
+                )
 
-            # 缓存 5x5 窗口在补零特征图中的25个相对位置。buffer 会随模型移动
-            # 到 CPU/CUDA，但 persistent=False 保证现有 checkpoint 的键完全不变。
-            radius = self.LOCAL_CROP_SIZE // 2
-            padded_width = width + 2 * radius
-            axis = torch.arange(self.LOCAL_CROP_SIZE)
-            local_offsets = axis[:, None] * padded_width + axis[None, :]
-            self.register_buffer("local_offsets", local_offsets.flatten(), persistent=False)
+                # 缓存局部窗口在补零特征图中的相对位置。buffer 会随模型移动
+                # 到 CPU/CUDA，但 persistent=False 保证现有 checkpoint 的键完全不变。
+                radius = self.local_crop_size // 2
+                padded_width = width + 2 * radius
+                axis = torch.arange(self.local_crop_size)
+                local_offsets = axis[:, None] * padded_width + axis[None, :]
+                self.register_buffer("local_offsets", local_offsets.flatten(), persistent=False)
 
-            # 全局维度随实际棋盘面积变化；局部分支始终为 8*5*5=200（默认通道数）。
+            # 全局维度随实际棋盘面积变化；局部分支随 local_crop_size 动态变化。
             global_size = cnn_output_channels * height * width
-            local_size = cnn_output_channels * self.LOCAL_CROP_SIZE**2
+            local_size = (
+                cnn_output_channels * self.local_crop_size**2 if self.use_local_crop else 0
+            )
             fused_size = global_size + local_size
             
-            # Hybrid 继续拼接固定长度的人工状态，最终维度为 8*H*W+220（默认配置）。
+            # Hybrid 继续拼接固定长度的人工状态；启用默认 3x3 局部分支时为 8*H*W+92。
             if state_mode == "hybrid":
                 fused_size += auxiliary_size
             self.feature = nn.Sequential(
@@ -179,7 +190,9 @@ class QNetwork(nn.Module):
     def _crop_around_head(
         self, features: torch.Tensor, grid: torch.Tensor
     ) -> torch.Tensor:
-        """按每个样本的蛇头坐标，批量提取可反向传播的 5x5 局部特征。"""
+        """按每个样本的蛇头坐标，批量提取可反向传播的局部特征。"""
+        if not self.use_local_crop:
+            raise RuntimeError("local crop branch is disabled")
         # grid[:,2:6] 是四个方向蛇头通道；求和后得到 [B,H,W] 的蛇头 mask。
         head_mask = grid[:, self.HEAD_CHANNEL_SLICE].sum(dim=1)
         batch_size = head_mask.shape[0]
@@ -188,12 +201,12 @@ class QNetwork(nn.Module):
         head_y = flat_positions // head_mask.shape[2]
         head_x = flat_positions % head_mask.shape[2]
 
-        # 四周补两格后，即使蛇头位于角落，也能获得完整的 5x5 窗口。
-        radius = self.LOCAL_CROP_SIZE // 2
+        # 四周补 radius 格后，即使蛇头位于角落，也能获得完整窗口。
+        radius = self.local_crop_size // 2
         padded = F.pad(features, (radius, radius, radius, radius))
         padded_flat = padded.flatten(2)
 
-        # padding 使窗口左上角恰好对应原始蛇头坐标；只收集目标25个位置，
+        # padding 使窗口左上角恰好对应原始蛇头坐标；只收集目标窗口位置，
         # 避免 unfold 为棋盘所有 H*W 个位置生成候选窗口。
         top_left = head_y * padded.shape[3] + head_x
         gather_index = top_left[:, None] + self.local_offsets[None, :]
@@ -201,12 +214,12 @@ class QNetwork(nn.Module):
             2,
             gather_index[:, None, :].expand(-1, features.shape[1], -1),
         )
-        # [B,C,25] 还原成 [B,C,5,5]，随后由调用方展平为200维。
+        # [B,C,K*K] 还原成 [B,C,K,K]，随后由调用方展平。
         return crops.reshape(
             batch_size,
             features.shape[1],
-            self.LOCAL_CROP_SIZE,
-            self.LOCAL_CROP_SIZE,
+            self.local_crop_size,
+            self.local_crop_size,
         )
 
     # 把两个CNN分支拉成一条向量。
@@ -217,10 +230,12 @@ class QNetwork(nn.Module):
         shared = self.cnn(grid)
         # 全局分支：[B,32,H,W] -> [B,8,H,W] -> [B,8*H*W]。
         global_features = self.global_projection(shared).flatten(1)
-        # 局部分支：[B,32,H,W] -> [B,8,H,W] -> 蛇头5x5 -> [B,200]。
+        if not self.use_local_crop:
+            return global_features
+        # 局部分支：[B,32,H,W] -> [B,8,H,W] -> 蛇头 KxK -> [B,8*K*K]。
         local_map = self.local_projection(shared)
         local_features = self._crop_around_head(local_map, grid).flatten(1)
-        # 默认得到 [B,8*H*W+200]，同时保留全局布局和蛇头附近的精确格子信息。
+        # 同时保留全局布局和蛇头附近的精确格子信息。
         return torch.cat((global_features, local_features), dim=1)
 
     def encode(

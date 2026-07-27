@@ -1,139 +1,261 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1680" viewBox="0 0 1200 1680" role="img" aria-labelledby="title desc">
-  <title id="title">Snake AI 当前 QNetwork 架构图</title>
-  <desc id="desc">默认 Hybrid 与 Dueling QNetwork，从九通道棋盘输入，经卷积残差主干、全局和蛇头局部分支、人工状态融合，最后输出三个动作 Q 值。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Snake AI 当前 Hybrid QNetwork 架构图</title>
+  <desc id="desc">当前 Hybrid QNetwork 从九通道棋盘和二十维人工状态输入，经共享卷积残差主干、全局与可选蛇头局部分支、Hybrid 特征融合和 Dueling 输出头，得到三个动作 Q 值。</desc>
+
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f8fbff"/>
-      <stop offset="1" stop-color="#eef4ff"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbfdff"/>
+      <stop offset="1" stop-color="#f3f6fb"/>
     </linearGradient>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
-      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#24436b" flood-opacity="0.16"/>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="145%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#334155" flood-opacity="0.13"/>
     </filter>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334e68"/>
+    <marker id="arrow-gray" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f97316"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9333ea"/>
     </marker>
     <style>
-      .title { font: 700 34px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #102a43; }
-      .subtitle { font: 400 17px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #486581; }
-      .box-title { font: 700 21px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #102a43; }
-      .box-text { font: 400 17px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #243b53; }
-      .small { font: 400 15px "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #486581; }
-      .formula { font: 600 18px Consolas, "Microsoft YaHei", monospace; fill: #102a43; }
-      .arrow { stroke: #334e68; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
-      .blue { fill: #eaf2ff; stroke: #2563eb; stroke-width: 2.5; }
-      .cyan { fill: #e7f8fb; stroke: #0891b2; stroke-width: 2.5; }
-      .green { fill: #ecfdf3; stroke: #16a34a; stroke-width: 2.5; }
-      .purple { fill: #f5efff; stroke: #7c3aed; stroke-width: 2.5; }
-      .orange { fill: #fff6e8; stroke: #ea580c; stroke-width: 2.5; }
-      .gray { fill: #f8fafc; stroke: #829ab1; stroke-width: 2; }
+      text { font-family: "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #172033; }
+      .title { font-size: 31px; font-weight: 700; }
+      .subtitle { font-size: 16px; fill: #526176; }
+      .panel-title { font-size: 21px; font-weight: 700; }
+      .section-title { font-size: 17px; font-weight: 700; }
+      .body { font-size: 15px; }
+      .small { font-size: 13px; fill: #46566c; }
+      .shape { font: 600 14px Consolas, "Microsoft YaHei", monospace; }
+      .formula { font: 600 15px Consolas, "Microsoft YaHei", monospace; }
+      .input-panel { fill: #fbfffc; stroke: #16a34a; stroke-width: 2; }
+      .backbone-panel { fill: #fbfdff; stroke: #2563eb; stroke-width: 2; }
+      .branch-panel { fill: #fffdfa; stroke: #f97316; stroke-width: 2; }
+      .fusion-panel { fill: #fcfbff; stroke: #6d5bd0; stroke-width: 2; }
+      .head-panel { fill: #fffdfd; stroke: #ef4444; stroke-width: 2; }
+      .output-panel { fill: #ffffff; stroke: #64748b; stroke-width: 2; }
+      .blue-box { fill: #f6f9ff; stroke: #5b8def; stroke-width: 1.5; }
+      .green-box { fill: #f4fff7; stroke: #35a853; stroke-width: 1.5; }
+      .orange-box { fill: #fff9f2; stroke: #fb923c; stroke-width: 1.5; }
+      .purple-box { fill: #fbf8ff; stroke: #a855f7; stroke-width: 1.5; }
+      .gray-box { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.4; }
+      .dashed { stroke-dasharray: 7 5; }
+      .arrow { fill: none; stroke: #475569; stroke-width: 2.2; marker-end: url(#arrow-gray); }
+      .arrow-green { fill: none; stroke: #16a34a; stroke-width: 2.2; marker-end: url(#arrow-green); }
+      .arrow-orange { fill: none; stroke: #f97316; stroke-width: 2.2; marker-end: url(#arrow-orange); }
+      .arrow-purple { fill: none; stroke: #9333ea; stroke-width: 2.2; marker-end: url(#arrow-purple); }
+      .divider { stroke: #cbd5e1; stroke-width: 1.2; }
     </style>
   </defs>
 
-  <rect width="1200" height="1680" rx="28" fill="url(#background)"/>
-  <text id="title-text" class="title" x="600" y="54" text-anchor="middle">Snake AI 当前 QNetwork 架构</text>
-  <text class="subtitle" x="600" y="84" text-anchor="middle">默认路径：Hybrid + Dueling　｜　B=Batch，H/W=棋盘高宽，Cₚ=投影通道（默认 8）</text>
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <text id="diagram-title" class="title" x="960" y="44" text-anchor="middle">Snake AI 当前 Hybrid QNetwork 架构</text>
+  <text class="subtitle" x="960" y="72" text-anchor="middle">B=Batch，H/W=棋盘高宽，C_b=32，C_p=8，hidden=256，Dueling=True，动作数=3</text>
 
-  <!-- Grid input -->
-  <rect class="blue" filter="url(#shadow)" x="260" y="112" width="680" height="82" rx="16"/>
-  <text class="box-title" x="600" y="146" text-anchor="middle">1. 九通道棋盘输入</text>
-  <text class="formula" x="600" y="176" text-anchor="middle">Grid [B, 9, H, W]</text>
+  <!-- Inputs -->
+  <rect class="input-panel" filter="url(#shadow)" x="24" y="102" width="230" height="824" rx="12"/>
+  <text class="panel-title" x="139" y="137" text-anchor="middle" fill="#118235">Hybrid 状态输入</text>
+  <line class="divider" x1="24" y1="153" x2="254" y2="153"/>
 
-  <path class="arrow" d="M 600 194 L 600 226"/>
+  <rect class="green-box" x="42" y="174" width="194" height="106" rx="9"/>
+  <text class="section-title" x="139" y="202" text-anchor="middle">Grid：九通道棋盘</text>
+  <text class="shape" x="139" y="228" text-anchor="middle">[B, 9, H, W]</text>
+  <text class="small" x="139" y="253" text-anchor="middle">默认 H=W=6</text>
 
-  <!-- Stem -->
-  <rect class="blue" filter="url(#shadow)" x="260" y="230" width="680" height="92" rx="16"/>
-  <text class="box-title" x="600" y="264" text-anchor="middle">2. CNN 输入映射</text>
-  <text class="formula" x="600" y="294" text-anchor="middle">3×3 Conv: 9 → C_b + GroupNorm + ReLU</text>
-  <text class="small" x="600" y="316" text-anchor="middle">C_b = cnn_channels，默认 32；padding=1，空间尺寸不变</text>
+  <text class="body" x="48" y="314">通道 0：墙壁 / 边界</text>
+  <text class="body" x="48" y="341">通道 1：蛇身（不含蛇头）</text>
+  <text class="body" x="48" y="368">通道 2–5：左/右/上/下蛇头</text>
+  <text class="body" x="48" y="395">通道 6：蛇尾</text>
+  <text class="body" x="48" y="422">通道 7：食物</text>
+  <text class="body" x="48" y="449">通道 8：蛇身顺序</text>
 
-  <path class="arrow" d="M 600 322 L 600 354"/>
+  <rect class="purple-box" x="42" y="484" width="194" height="250" rx="9"/>
+  <text class="section-title" x="139" y="513" text-anchor="middle">Auxiliary：人工状态</text>
+  <text class="shape" x="139" y="541" text-anchor="middle">[B, 20]</text>
+  <text class="small" x="57" y="575">危险方向：3</text>
+  <text class="small" x="57" y="600">当前方向：4</text>
+  <text class="small" x="57" y="625">食物相对方向与距离：6</text>
+  <text class="small" x="57" y="650">墙壁距离：3</text>
+  <text class="small" x="57" y="675">身体距离：3</text>
+  <text class="small" x="57" y="700">饥饿进度：1</text>
+  <text class="small" x="139" y="724" text-anchor="middle">与空间特征在融合层拼接</text>
 
-  <!-- Residual blocks -->
-  <rect class="blue" filter="url(#shadow)" x="205" y="358" width="790" height="116" rx="16"/>
-  <text class="box-title" x="600" y="390" text-anchor="middle">3. 共享残差主干</text>
-  <text class="formula" x="600" y="420" text-anchor="middle">ResidualBlock × 3，dilation = (1, 1, 2)</text>
-  <text class="small" x="600" y="447" text-anchor="middle">每块：空洞 3×3 Conv + GN + ReLU → 普通 3×3 Conv + GN → 残差相加 + ReLU</text>
-  <text class="small" x="600" y="468" text-anchor="middle">输出保持 [B, C_b, H, W]，默认 [B, 32, H, W]</text>
+  <rect class="gray-box" x="42" y="774" width="194" height="121" rx="9"/>
+  <text class="section-title" x="139" y="804" text-anchor="middle">Hybrid observation</text>
+  <text class="shape" x="139" y="837" text-anchor="middle">(Grid, Auxiliary)</text>
+  <text class="small" x="139" y="865" text-anchor="middle">CNN 只处理 Grid</text>
+  <text class="small" x="139" y="886" text-anchor="middle">人工状态在展平后参与融合</text>
 
-  <path class="arrow" d="M 600 474 L 600 506"/>
+  <!-- Backbone -->
+  <rect class="backbone-panel" filter="url(#shadow)" x="286" y="102" width="348" height="824" rx="12"/>
+  <text class="panel-title" x="460" y="137" text-anchor="middle" fill="#1746a2">Hybrid 的共享 CNN 主干</text>
+  <line class="divider" x1="286" y1="153" x2="634" y2="153"/>
 
-  <!-- Shared split -->
-  <rect class="cyan" x="410" y="510" width="380" height="58" rx="14"/>
-  <text class="box-title" x="600" y="547" text-anchor="middle">共享空间特征</text>
-  <path class="arrow" d="M 520 568 L 320 618"/>
-  <path class="arrow" d="M 680 568 L 880 618"/>
+  <rect class="blue-box" x="314" y="176" width="292" height="100" rx="9"/>
+  <text class="section-title" x="460" y="205" text-anchor="middle">输入映射</text>
+  <text class="formula" x="460" y="232" text-anchor="middle">3×3 Conv: 9 → C_b, padding=1</text>
+  <text class="body" x="460" y="258" text-anchor="middle">GroupNorm(g_b, C_b) → ReLU</text>
 
-  <!-- Global branch -->
-  <rect class="cyan" filter="url(#shadow)" x="80" y="622" width="470" height="126" rx="16"/>
-  <text class="box-title" x="315" y="654" text-anchor="middle">4A. 全局分支</text>
-  <text class="formula" x="315" y="686" text-anchor="middle">1×1 Conv: C_b → Cₚ + GN + ReLU</text>
-  <text class="box-text" x="315" y="716" text-anchor="middle">完整 H×W 展平</text>
-  <text class="formula" x="315" y="740" text-anchor="middle">[B, Cₚ·H·W]</text>
+  <path class="arrow" d="M460 276 L460 307"/>
 
-  <!-- Local branch -->
-  <rect class="cyan" filter="url(#shadow)" x="650" y="622" width="470" height="126" rx="16"/>
-  <text class="box-title" x="885" y="654" text-anchor="middle">4B. 蛇头局部分支</text>
-  <text class="formula" x="885" y="686" text-anchor="middle">1×1 Conv: C_b → Cₚ + GN + ReLU</text>
-  <text class="box-text" x="885" y="716" text-anchor="middle">以蛇头为中心提取 5×5（边界补零）</text>
-  <text class="formula" x="885" y="740" text-anchor="middle">[B, 25·Cₚ]　默认 200 维</text>
+  <rect class="blue-box dashed" x="306" y="311" width="308" height="378" rx="10"/>
+  <text class="section-title" x="460" y="341" text-anchor="middle">ResidualBlock × len(cnn_dilations)</text>
+  <text class="shape" x="460" y="367" text-anchor="middle">默认 dilation = (1, 1, 2)，共 3 块</text>
 
-  <path class="arrow" d="M 315 748 L 470 806"/>
-  <path class="arrow" d="M 885 748 L 730 806"/>
+  <rect class="blue-box" x="329" y="392" width="262" height="77" rx="8"/>
+  <text class="formula" x="460" y="420" text-anchor="middle">3×3 Dilated Conv: C_b → C_b</text>
+  <text class="body" x="460" y="449" text-anchor="middle">GN(g_b,C_b) → ReLU</text>
 
-  <!-- Spatial concat -->
-  <rect class="cyan" filter="url(#shadow)" x="270" y="810" width="660" height="82" rx="16"/>
-  <text class="box-title" x="600" y="842" text-anchor="middle">5. 拼接全局与局部空间特征</text>
-  <text class="formula" x="600" y="874" text-anchor="middle">Cₚ·H·W + 25·Cₚ　｜　默认 8HW + 200</text>
+  <path class="arrow" d="M460 469 L460 493"/>
 
-  <!-- Auxiliary input and fusion -->
-  <path class="arrow" d="M 600 892 L 600 932"/>
-  <rect class="green" filter="url(#shadow)" x="75" y="918" width="300" height="84" rx="16"/>
-  <text class="box-title" x="225" y="952" text-anchor="middle">20 维人工状态</text>
-  <text class="small" x="225" y="980" text-anchor="middle">仅 Hybrid 模式拼接</text>
-  <path class="arrow" d="M 375 960 L 460 960"/>
+  <rect class="blue-box" x="329" y="497" width="262" height="77" rx="8"/>
+  <text class="formula" x="460" y="525" text-anchor="middle">3×3 Conv: C_b → C_b</text>
+  <text class="body" x="460" y="554" text-anchor="middle">dilation=1, padding=1 → GN(g_b,C_b)</text>
 
-  <rect class="green" filter="url(#shadow)" x="460" y="922" width="665" height="78" rx="16"/>
-  <text class="box-title" x="792" y="952" text-anchor="middle">6. Hybrid 特征融合</text>
-  <text class="formula" x="792" y="982" text-anchor="middle">Cₚ·H·W + 25·Cₚ + 20　｜　默认 8HW + 220</text>
+  <path class="arrow" d="M460 574 L460 602"/>
+  <circle cx="460" cy="619" r="16" fill="#ffffff" stroke="#475569" stroke-width="1.8"/>
+  <text class="section-title" x="460" y="625" text-anchor="middle">+</text>
+  <path class="arrow" d="M460 635 L460 657"/>
+  <text class="body" x="460" y="678" text-anchor="middle">残差相加 → ReLU</text>
 
-  <path class="arrow" d="M 792 1000 L 792 1038 L 600 1038 L 600 1062"/>
+  <rect class="blue-box" x="314" y="724" width="292" height="106" rx="9"/>
+  <text class="section-title" x="460" y="754" text-anchor="middle">共享特征图</text>
+  <text class="shape" x="460" y="783" text-anchor="middle">[B, C_b, H, W]</text>
+  <text class="small" x="460" y="808" text-anchor="middle">默认 [B, 32, H, W]，无空间下采样</text>
 
-  <!-- Shared FC -->
-  <rect class="orange" filter="url(#shadow)" x="260" y="1066" width="680" height="86" rx="16"/>
-  <text class="box-title" x="600" y="1100" text-anchor="middle">7. 共享决策特征</text>
-  <text class="formula" x="600" y="1132" text-anchor="middle">Linear(fused_size → hidden_size) + ReLU　｜　默认 → 256</text>
+  <rect class="gray-box" x="314" y="854" width="292" height="50" rx="8"/>
+  <text class="small" x="460" y="876" text-anchor="middle">g_b = 最大且 ≤8、可整除 C_b 的组数</text>
+  <text class="small" x="460" y="896" text-anchor="middle">默认 GN(8,32)：8 组，每组 4 通道</text>
 
-  <path class="arrow" d="M 520 1152 L 350 1198"/>
-  <path class="arrow" d="M 680 1152 L 850 1198"/>
+  <!-- Branches -->
+  <rect class="branch-panel" filter="url(#shadow)" x="670" y="102" width="374" height="824" rx="12"/>
+  <text class="panel-title" x="857" y="137" text-anchor="middle" fill="#d95f02">空间特征分支</text>
+  <line class="divider" x1="670" y1="153" x2="1044" y2="153"/>
 
-  <!-- Dueling streams -->
-  <rect class="purple" filter="url(#shadow)" x="100" y="1202" width="470" height="126" rx="16"/>
-  <text class="box-title" x="335" y="1236" text-anchor="middle">8A. Value Stream</text>
-  <text class="formula" x="335" y="1270" text-anchor="middle">256 → 128 + ReLU → 1</text>
-  <text class="box-text" x="335" y="1303" text-anchor="middle">状态价值 V(s)</text>
+  <rect class="green-box" x="695" y="176" width="324" height="226" rx="10"/>
+  <text class="section-title" x="857" y="207" text-anchor="middle" fill="#118235">全局分支（始终存在）</text>
+  <text class="formula" x="857" y="240" text-anchor="middle">1×1 Conv: C_b → C_p</text>
+  <text class="body" x="857" y="269" text-anchor="middle">GroupNorm(g_p,C_p) → ReLU</text>
+  <text class="body" x="857" y="309" text-anchor="middle">保留完整 H×W 特征图并 Flatten</text>
+  <text class="shape" x="857" y="341" text-anchor="middle">[B, C_p·H·W]</text>
+  <text class="shape" x="857" y="371" text-anchor="middle">默认 6×6：[B, 288]</text>
 
-  <rect class="purple" filter="url(#shadow)" x="630" y="1202" width="470" height="126" rx="16"/>
-  <text class="box-title" x="865" y="1236" text-anchor="middle">8B. Advantage Stream</text>
-  <text class="formula" x="865" y="1270" text-anchor="middle">256 → 128 + ReLU → 3</text>
-  <text class="box-text" x="865" y="1303" text-anchor="middle">动作优势 A(s,a)</text>
+  <rect class="orange-box" x="695" y="430" width="324" height="350" rx="10"/>
+  <text class="section-title" x="857" y="461" text-anchor="middle" fill="#d95f02">蛇头局部分支（可关闭）</text>
+  <text class="formula" x="857" y="494" text-anchor="middle">1×1 Conv: C_b → C_p</text>
+  <text class="body" x="857" y="523" text-anchor="middle">GroupNorm(g_p,C_p) → ReLU</text>
+  <line class="divider" x1="719" y1="544" x2="995" y2="544"/>
+  <text class="body" x="857" y="574" text-anchor="middle">Grid 通道 2:6 求和并 argmax</text>
+  <text class="body" x="857" y="602" text-anchor="middle">获得每个样本的蛇头坐标</text>
+  <text class="body" x="857" y="637" text-anchor="middle">补零半径 r=(K−1)/2</text>
+  <text class="body" x="857" y="665" text-anchor="middle">直接 gather 蛇头中心 K×K 窗口</text>
+  <text class="shape" x="857" y="701" text-anchor="middle">[B, C_p·K²]</text>
+  <text class="shape" x="857" y="731" text-anchor="middle">默认 K=3：[B, 72]</text>
+  <text class="small" x="857" y="761" text-anchor="middle">K 为正奇数；--no-local-crop 完全移除此分支</text>
 
-  <path class="arrow" d="M 335 1328 L 480 1372"/>
-  <path class="arrow" d="M 865 1328 L 720 1372"/>
+  <rect class="gray-box" x="695" y="810" width="324" height="94" rx="8"/>
+  <text class="small" x="857" y="836" text-anchor="middle">g_p = 最大且 ≤4、可整除 C_p 的组数</text>
+  <text class="small" x="857" y="861" text-anchor="middle">默认 GN(4,8)：4 组，每组 2 通道</text>
+  <text class="small" x="857" y="886" text-anchor="middle">全局与局部投影层不共享权重</text>
 
-  <!-- Dueling combine -->
-  <rect class="purple" filter="url(#shadow)" x="245" y="1376" width="710" height="80" rx="16"/>
-  <text class="box-title" x="600" y="1408" text-anchor="middle">9. Dueling 合并</text>
-  <text class="formula" x="600" y="1438" text-anchor="middle">Q(s,a) = V(s) + A(s,a) − meanₐ A(s,a)</text>
+  <!-- Fusion -->
+  <rect class="fusion-panel" filter="url(#shadow)" x="1082" y="102" width="276" height="824" rx="12"/>
+  <text class="panel-title" x="1220" y="137" text-anchor="middle" fill="#5946b2">特征编码与融合</text>
+  <line class="divider" x1="1082" y1="153" x2="1358" y2="153"/>
 
-  <path class="arrow" d="M 600 1456 L 600 1484"/>
+  <rect class="purple-box" x="1106" y="186" width="228" height="176" rx="9"/>
+  <text class="section-title" x="1220" y="215" text-anchor="middle">空间特征拼接</text>
+  <text class="shape" x="1220" y="249" text-anchor="middle">启用局部分支：</text>
+  <text class="shape" x="1220" y="276" text-anchor="middle">C_p·H·W + C_p·K²</text>
+  <text class="shape" x="1220" y="309" text-anchor="middle">默认 6×6、K=3：[B,360]</text>
+  <text class="small" x="1220" y="339" text-anchor="middle">关闭局部分支时：[B,C_p·H·W]</text>
+
+  <rect class="purple-box" x="1106" y="397" width="228" height="158" rx="9"/>
+  <text class="section-title" x="1220" y="426" text-anchor="middle">Hybrid 特征融合</text>
+  <text class="body" x="1220" y="462" text-anchor="middle">空间特征 + Auxiliary [B,20]</text>
+  <text class="shape" x="1220" y="493" text-anchor="middle">Concat(dim=1)</text>
+  <text class="shape" x="1220" y="525" text-anchor="middle">默认输出：[B,380]</text>
+
+  <rect class="blue-box" x="1106" y="589" width="228" height="122" rx="9"/>
+  <text class="section-title" x="1220" y="619" text-anchor="middle">Hybrid 编码层</text>
+  <text class="formula" x="1220" y="652" text-anchor="middle">Linear(fused → hidden)</text>
+  <text class="body" x="1220" y="682" text-anchor="middle">ReLU → [B,256]</text>
+
+  <rect class="gray-box" x="1106" y="750" width="228" height="132" rx="9"/>
+  <text class="section-title" x="1220" y="779" text-anchor="middle">默认融合维度</text>
+  <text class="shape" x="1220" y="810" text-anchor="middle">启用局部：288+72+20=380</text>
+  <text class="shape" x="1220" y="839" text-anchor="middle">关闭局部：288+20=308</text>
+  <text class="small" x="1220" y="866" text-anchor="middle">维度随 H、W、K、C_p 动态变化</text>
+
+  <!-- Heads -->
+  <rect class="head-panel" filter="url(#shadow)" x="1396" y="102" width="330" height="824" rx="12"/>
+  <text class="panel-title" x="1561" y="137" text-anchor="middle" fill="#dc2626">Q 值输出头</text>
+  <line class="divider" x1="1396" y1="153" x2="1726" y2="153"/>
+
+  <text class="section-title" x="1561" y="184" text-anchor="middle">Dueling Heads</text>
+
+  <rect class="blue-box" x="1420" y="205" width="282" height="190" rx="10"/>
+  <text class="section-title" x="1561" y="235" text-anchor="middle" fill="#1746a2">Value Stream</text>
+  <text class="formula" x="1561" y="275" text-anchor="middle">Linear 256 → 128</text>
+  <text class="body" x="1561" y="307" text-anchor="middle">ReLU</text>
+  <text class="formula" x="1561" y="339" text-anchor="middle">Linear 128 → 1</text>
+  <text class="shape" x="1561" y="374" text-anchor="middle">V(s)：[B,1]</text>
+
+  <rect class="orange-box" x="1420" y="430" width="282" height="190" rx="10"/>
+  <text class="section-title" x="1561" y="460" text-anchor="middle" fill="#d95f02">Advantage Stream</text>
+  <text class="formula" x="1561" y="500" text-anchor="middle">Linear 256 → 128</text>
+  <text class="body" x="1561" y="532" text-anchor="middle">ReLU</text>
+  <text class="formula" x="1561" y="564" text-anchor="middle">Linear 128 → 3</text>
+  <text class="shape" x="1561" y="599" text-anchor="middle">A(s,a)：[B,3]</text>
+
+  <rect class="gray-box" x="1420" y="675" width="282" height="118" rx="9"/>
+  <text class="section-title" x="1561" y="707" text-anchor="middle">Dueling 合并</text>
+  <text class="formula" x="1561" y="744" text-anchor="middle">Q = V + A − meanₐ(A)</text>
+  <text class="shape" x="1561" y="775" text-anchor="middle">[B,3]</text>
+
+  <rect class="gray-box" x="1420" y="835" width="282" height="67" rx="9"/>
+  <text class="small" x="1561" y="863" text-anchor="middle">stream_size = max(hidden_size / 2, 1)</text>
+  <text class="small" x="1561" y="888" text-anchor="middle">默认 stream_size=128</text>
 
   <!-- Output -->
-  <rect class="orange" filter="url(#shadow)" x="315" y="1488" width="570" height="70" rx="16"/>
-  <text class="box-title" x="600" y="1520" text-anchor="middle">10. 三个动作 Q 值</text>
-  <text class="formula" x="600" y="1547" text-anchor="middle">[直行, 右转, 左转]</text>
+  <rect class="output-panel" filter="url(#shadow)" x="1760" y="340" width="136" height="235" rx="12"/>
+  <text class="panel-title" x="1828" y="376" text-anchor="middle">Q 值</text>
+  <text class="shape" x="1828" y="411" text-anchor="middle">[B,3]</text>
+  <line class="divider" x1="1778" y1="432" x2="1878" y2="432"/>
+  <text class="body" x="1828" y="465" text-anchor="middle">动作 0：直行</text>
+  <text class="body" x="1828" y="497" text-anchor="middle">动作 1：右转</text>
+  <text class="body" x="1828" y="529" text-anchor="middle">动作 2：左转</text>
+  <text class="small" x="1828" y="557" text-anchor="middle">output_size=3</text>
 
-  <!-- Variant notes -->
-  <rect class="gray" x="55" y="1590" width="1090" height="66" rx="14"/>
-  <text class="small" x="600" y="1616" text-anchor="middle">其他路径：Grid 不拼接 20 维人工状态；Vector 使用两层 MLP，并直接输出 Value/Advantage。</text>
-  <text class="small" x="600" y="1642" text-anchor="middle">dueling=False 时跳过双流结构，由共享特征经单个 Linear 直接输出三个 Q 值；Cₚ 可用 --cnn-output-channels 修改。</text>
+  <!-- Flow arrows -->
+  <path class="arrow" d="M254 227 L286 227"/>
+  <path class="arrow" d="M634 775 L652 775 L652 286 L695 286"/>
+  <path class="arrow-orange" d="M634 775 L670 775 L670 606 L695 606"/>
+  <path class="arrow-green" d="M1019 286 L1063 286 L1063 247 L1106 247"/>
+  <path class="arrow-orange" d="M1019 606 L1063 606 L1063 304 L1106 304"/>
+  <path class="arrow-purple" d="M236 609 L267 609 L267 938 L1066 938 L1066 476 L1106 476"/>
+  <path class="arrow" d="M1334 650 L1376 650 L1376 314 L1420 314"/>
+  <path class="arrow" d="M1334 650 L1376 650 L1376 525 L1420 525"/>
+  <path class="arrow" d="M1480 395 L1408 395 L1408 657 L1480 675"/>
+  <path class="arrow-orange" d="M1622 620 L1622 675"/>
+  <path class="arrow" d="M1702 734 L1739 734 L1739 524 L1760 524"/>
+
+  <!-- Legend -->
+  <rect class="output-panel" x="1760" y="700" width="136" height="202" rx="10"/>
+  <text class="section-title" x="1828" y="730" text-anchor="middle">图例</text>
+  <line x1="1779" y1="762" x2="1815" y2="762" stroke="#475569" stroke-width="2.2" marker-end="url(#arrow-gray)"/>
+  <text class="small" x="1821" y="767">主流程</text>
+  <line x1="1779" y1="797" x2="1815" y2="797" stroke="#16a34a" stroke-width="2.2" marker-end="url(#arrow-green)"/>
+  <text class="small" x="1821" y="802">全局</text>
+  <line x1="1779" y1="832" x2="1815" y2="832" stroke="#f97316" stroke-width="2.2" marker-end="url(#arrow-orange)"/>
+  <text class="small" x="1821" y="837">局部</text>
+  <line x1="1779" y1="867" x2="1815" y2="867" stroke="#9333ea" stroke-width="2.2" marker-end="url(#arrow-purple)"/>
+  <text class="small" x="1821" y="872">人工状态</text>
+
+  <text class="small" x="960" y="968" text-anchor="middle">Hybrid 路径可配置项：cnn_channels、cnn_output_channels、cnn_dilations、hidden_size、local_crop_size、use_local_crop</text>
+  <text class="small" x="960" y="995" text-anchor="middle">默认 6×6 Hybrid：空间 288 + 局部 72 + 人工状态 20 = 380 → hidden 256 → Value / Advantage → 3 个动作 Q 值</text>
 </svg>

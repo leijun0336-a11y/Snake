@@ -146,6 +146,7 @@ bash scripts/train_autodl.sh \
   --hidden-size 256 \
   --cnn-channels 32 --cnn-output-channels 8 \
   --cnn-dilations 1 1 2 \
+  --local-crop --local-crop-size 3 \
   --ppo-rollout-steps 2048 --ppo-update-epochs 4 \
   --ppo-gae-lambda 0.95 --ppo-clip-coefficient 0.2 \
   --ppo-value-clip-coefficient 0.2 \
@@ -238,9 +239,9 @@ flowchart TB
 
         LP["局部 1×1 Conv 32→8<br/>GroupNorm + ReLU"]
         HEAD["由 Grid 通道 2:6 定位蛇头"]
-        CROP["Pad 2 + 展平 + 直接 gather 25 个位置<br/>蛇头中心 5×5"]
-        LF["展平 [B,8×5×5] = [B,200]"]
-        SF["空间特征拼接<br/>[B,8HW+200]"]
+        CROP["Pad (K-1)/2 + 展平 + 直接 gather K² 个位置<br/>蛇头中心 K×K，默认 K=3"]
+        LF["展平 [B,8×K×K]<br/>默认 [B,72]"]
+        SF["空间特征拼接<br/>默认 [B,8HW+72]"]
 
         GIN --> STEM --> RB1 --> RB2 --> RB3 --> SHARED
         SHARED --> GP --> GF --> SF
@@ -249,12 +250,12 @@ flowchart TB
     end
 
     subgraph GRIDHEAD["Grid 决策路径"]
-        GFC["Linear (8HW+200)→256 + ReLU"]
+        GFC["Linear (8HW+72)→256 + ReLU"]
     end
 
     subgraph HYBRIDHEAD["Hybrid 决策路径"]
         AUX["人工状态 [B,20]"]
-        HF["拼接 [B,8HW+220]"]
+        HF["拼接 [B,8HW+92]"]
         HFC["Linear (8HW+220)→256 + ReLU"]
         AUX --> HF --> HFC
     end
@@ -301,12 +302,12 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 | 路径 | 进入隐藏层前 | 隐藏特征 | Dueling 输出 |
 |---|---:|---:|---:|
 | Vector | `20` | `256` | `V: 1`，`A: 3` |
-| Grid | `8×6×6 + 200 = 488` | `256` | `256→128→1/3` |
-| Hybrid | `488 + 20 = 508` | `256` | `256→128→1/3` |
+| Grid | `8×6×6 + 72 = 360` | `256` | `256→128→1/3` |
+| Hybrid | `360 + 20 = 380` | `256` | `256→128→1/3` |
 
 棋盘高宽直接来自 `--height` 和 `--width`，CNN 不做空间下采样或自适应池化。因此进入隐藏层的全局特征维度和融合全连接层参数量随棋盘面积变化，checkpoint 评估时必须使用与训练一致的棋盘尺寸。
 
-局部分支始终截取蛇头周围 `5 × 5`。它先从 Grid 的 `2:6` 方向通道定位蛇头，再给 `local_projection` 特征图四周补两格零，将其展平后直接 `gather` 目标窗口的 25 个位置。固定相对索引通过 `persistent=False` buffer 缓存，会随模型移动到 CPU/CUDA，但不写入 `state_dict`。该实现不再为全部 `H×W` 位置生成 `unfold` 候选窗口，输出和梯度与原实现严格等价，已有 architecture v3 checkpoint 可继续加载。
+局部分支默认开启，通过 `--local-crop-size K` 截取蛇头周围的 `K × K` 区域，`K` 默认为 `3`，且必须是正奇数。它先从 Grid 的 `2:6` 方向通道定位蛇头，再给 `local_projection` 特征图补零，将其展平后直接 `gather` 目标窗口的 `K²` 个位置。固定相对索引通过 `persistent=False` buffer 缓存，会随模型移动到 CPU/CUDA，但不写入 `state_dict`。使用 `--no-local-crop` 可完全移除局部投影和裁剪分支，此时 Grid/Hybrid 进入隐藏层前的维度分别为 `8HW` 和 `8HW+20`；使用 `--local-crop` 可显式启用。缺少这两个配置字段的历史 DQN architecture v3 与 PPO architecture v1 checkpoint 会自动按原有的“启用 `5 × 5` 局部分支”加载。
 
 当 `dueling=False` 时，不再使用 Value/Advantage 分支，而是通过单个 `Linear(256→3)` 直接输出动作 Q 值。当前训练入口默认启用 Dueling。
 

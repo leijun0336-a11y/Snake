@@ -70,6 +70,10 @@ class DQNAgent:
         cnn_output_channels: int = 8,
         # 空洞残差块的 dilation 序列。
         cnn_dilations: tuple[int, ...] = (1, 1, 2),
+        # 以蛇头为中心的局部裁剪窗口边长，必须为正奇数。
+        local_crop_size: int = QNetwork.DEFAULT_LOCAL_CROP_SIZE,
+        # 是否创建并使用局部裁剪分支。
+        use_local_crop: bool = True,
         # 随机种子，用于让探索、采样和网络初始化尽量可复现。
         seed: int = 42,
         # 计算设备；不传时优先使用 cuda，否则使用 cpu。
@@ -83,6 +87,8 @@ class DQNAgent:
         self.cnn_channels = cnn_channels
         self.cnn_output_channels = cnn_output_channels
         self.cnn_dilations = tuple(cnn_dilations)
+        self.local_crop_size = local_crop_size
+        self.use_local_crop = use_local_crop
         self.learning_rate = learning_rate
         self.batch_size = batch_size
         self.gamma = gamma
@@ -312,6 +318,8 @@ class DQNAgent:
             cnn_channels=self.cnn_channels,
             cnn_output_channels=self.cnn_output_channels,
             cnn_dilations=self.cnn_dilations,
+            local_crop_size=self.local_crop_size,
+            use_local_crop=self.use_local_crop,
         ).to(self.device)
 
     def _state_batch_to_tensor(
@@ -381,6 +389,8 @@ class DQNAgent:
             "cnn_channels": self.cnn_channels,
             "cnn_output_channels": self.cnn_output_channels,
             "cnn_dilations": self.cnn_dilations,
+            "local_crop_size": self.local_crop_size,
+            "use_local_crop": self.use_local_crop,
             # 动作数量，方便加载时检查环境和模型是否匹配。
             "hidden_size": self.hidden_size,
             "action_size": self.action_size,
@@ -458,6 +468,11 @@ class DQNAgent:
         checkpoint_cnn_channels = int(checkpoint["cnn_channels"])
         checkpoint_cnn_output_channels = int(checkpoint["cnn_output_channels"])
         checkpoint_cnn_dilations = tuple(int(value) for value in checkpoint["cnn_dilations"])
+        # architecture v3 的历史 checkpoint 没有该字段，固定使用当时的 5x5。
+        checkpoint_local_crop_size = int(
+            checkpoint.get("local_crop_size", QNetwork.LEGACY_LOCAL_CROP_SIZE)
+        )
+        checkpoint_use_local_crop = bool(checkpoint.get("use_local_crop", True))
         if checkpoint_state_mode == "hybrid" and checkpoint_auxiliary_size != self.auxiliary_size:
             raise ValueError(
                 f"Checkpoint auxiliary_size={checkpoint_auxiliary_size} does not match "
@@ -469,6 +484,8 @@ class DQNAgent:
             or checkpoint_cnn_channels != self.cnn_channels
             or checkpoint_cnn_output_channels != self.cnn_output_channels
             or checkpoint_cnn_dilations != self.cnn_dilations
+            or checkpoint_local_crop_size != self.local_crop_size
+            or checkpoint_use_local_crop != self.use_local_crop
         )
         # 按 checkpoint 中记录的完整架构参数重建网络，再加载对应权重。
         if architecture_changed:
@@ -477,6 +494,8 @@ class DQNAgent:
             self.cnn_channels = checkpoint_cnn_channels
             self.cnn_output_channels = checkpoint_cnn_output_channels
             self.cnn_dilations = checkpoint_cnn_dilations
+            self.local_crop_size = checkpoint_local_crop_size
+            self.use_local_crop = checkpoint_use_local_crop
             self.policy_net = self._build_network()
             self.target_net = self._build_network()
             self.target_net.eval()

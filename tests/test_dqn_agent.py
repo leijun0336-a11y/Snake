@@ -139,7 +139,7 @@ def test_cnn_feature_size_follows_grid_dimensions(
         cnn_output_channels=8,
         cnn_dilations=(1,),
     )
-    expected_features = 8 * height * width + 200
+    expected_features = 8 * height * width + 8 * network.local_crop_size**2
     if state_mode == "hybrid":
         expected_features += 20
 
@@ -276,6 +276,8 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
         cnn_channels=24,
         cnn_output_channels=12,
         cnn_dilations=(1, 3),
+        local_crop_size=5,
+        use_local_crop=False,
         epsilon_exp_decay=True,
         epsilon_exp_factor=0.8,
         epsilon_linear_episodes=123,
@@ -295,6 +297,8 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     assert loaded_agent.cnn_channels == 24
     assert loaded_agent.cnn_output_channels == 12
     assert loaded_agent.cnn_dilations == (1, 3)
+    assert loaded_agent.local_crop_size == 5
+    assert loaded_agent.use_local_crop is False
     assert loaded_agent.epsilon_exp_decay is True
     assert loaded_agent.epsilon_exp_factor == 0.8
     assert loaded_agent.epsilon_linear_episodes == 123
@@ -335,6 +339,33 @@ def test_checkpoint_restores_n_step_training_semantics(tmp_path) -> None:
     assert loaded_agent.gamma == pytest.approx(0.95)
     assert loaded_agent.n_step_accumulator.n_step == 4
     assert loaded_agent.n_step_accumulator.gamma == pytest.approx(0.95)
+
+
+def test_legacy_dqn_checkpoint_without_crop_metadata_uses_historical_5x5(tmp_path) -> None:
+    checkpoint_path = tmp_path / "legacy_crop.pt"
+    source = DQNAgent(
+        state_size=(9, 6, 6),
+        action_size=3,
+        state_mode="grid",
+        local_crop_size=5,
+        seed=1,
+    )
+    source.save(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint.pop("local_crop_size")
+    checkpoint.pop("use_local_crop")
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded = DQNAgent(
+        state_size=(9, 6, 6),
+        action_size=3,
+        state_mode="grid",
+        seed=2,
+    )
+    loaded.load(checkpoint_path)
+
+    assert loaded.local_crop_size == 5
+    assert loaded.use_local_crop is True
 
 
 @pytest.mark.parametrize("architecture_version", [None, 1, 2, 4])
