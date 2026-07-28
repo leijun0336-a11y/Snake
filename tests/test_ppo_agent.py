@@ -17,17 +17,17 @@ def test_ppo_agent_uses_current_default_learning_rate() -> None:
 
 
 def test_hybrid_ppo_policy_matches_dueling_dqn_policy_capacity() -> None:
-    common = dict(
-        state_size=(9, 10, 10),
-        action_size=3,
-        hidden_size=256,
-        state_mode="hybrid",
-        auxiliary_size=20,
-        cnn_channels=32,
-        cnn_output_channels=8,
-        cnn_dilations=(1, 1, 2),
-        seed=1,
-    )
+    common = {
+        "state_size": (9, 10, 10),
+        "action_size": 3,
+        "hidden_size": 256,
+        "state_mode": "hybrid",
+        "auxiliary_size": 20,
+        "cnn_channels": 32,
+        "cnn_output_channels": 8,
+        "cnn_dilations": (1, 1, 2),
+        "seed": 1,
+    }
     dqn = DQNAgent(**common)
     ppo = PPOAgent(**common, rollout_steps=4, batch_size=2)
 

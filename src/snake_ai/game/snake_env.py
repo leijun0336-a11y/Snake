@@ -1,29 +1,27 @@
-# 处理自引用问题
-from __future__ import annotations  
+# 延迟解析类型注解，便于在类型定义中引用尚未声明的名称。
+from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-# Enumeration（枚举） 的缩写，Python 用来定义一组固定常量的工具
-from enum import Enum  
+from enum import Enum
 
 import numpy as np
 
 from snake_ai.config import get_reward_config
 from snake_ai.game.food_policy import FoodPolicy, RandomFoodPolicy
 
-
 GridState = np.ndarray
 HybridState = tuple[GridState, list[float]]
 Observation = list[float] | GridState | HybridState
 InfoValue = int | float | str
 
-@dataclass(frozen=True)  
+
+@dataclass(frozen=True)
 class Point:
     x: int
     y: int
 
 
-# 对方向进行编码
 class Direction(Enum):
     RIGHT = 0
     DOWN = 1
@@ -32,7 +30,7 @@ class Direction(Enum):
 
 
 class SnakeEnv:
-    """适合低维 DQN 训练的轻量级(类 Gym)贪吃蛇环境"""
+    """支持 Vector/Grid/Hybrid 状态和 DQN/PPO 训练的轻量级类 Gym 环境。"""
 
     # 动作维度
     action_size = 3
@@ -91,16 +89,12 @@ class SnakeEnv:
             profile.collision_penalty if collision_penalty is None else collision_penalty
         )
         starvation_penalty = (
-            profile.starvation_penalty
-            if starvation_penalty is None
-            else starvation_penalty
+            profile.starvation_penalty if starvation_penalty is None else starvation_penalty
         )
         win_reward = profile.win_reward if win_reward is None else win_reward
         step_penalty = profile.step_penalty if step_penalty is None else step_penalty
         hunger_penalty_scale = (
-            profile.hunger_penalty_scale
-            if hunger_penalty_scale is None
-            else hunger_penalty_scale
+            profile.hunger_penalty_scale if hunger_penalty_scale is None else hunger_penalty_scale
         )
 
         if width < 5 or height < 5:
@@ -169,7 +163,7 @@ class SnakeEnv:
             self.random.seed(seed)
         center = Point(self.width // 2, self.height // 2)
         self.direction = Direction.RIGHT
-        
+
         # 蛇初始在地图中间，笔直朝右，长度为3
         self.snake = [
             center,
@@ -463,7 +457,7 @@ class SnakeEnv:
             "historical_source_revision": self.historical_source_revision,
         }
 
-    # 静态方法，把所有奖励分量初始化为 0.0
+    # 创建一组清零的单步奖励分量。
     @staticmethod
     def _empty_reward_components() -> dict[str, float]:
         return {
@@ -488,11 +482,7 @@ class SnakeEnv:
         return "collision_body"
 
     def _place_food(self) -> None:
-        all_cells = [
-            Point(x, y)
-            for x in range(self.width)
-            for y in range(self.height)
-        ]
+        all_cells = [Point(x, y) for x in range(self.width) for y in range(self.height)]
         snake_cells = set(self.snake)
         available = [point for point in all_cells if point not in snake_cells]
         # 极端情况: 如果整个地图都没有地方能放食物，则直接放在蛇头的位置
@@ -518,10 +508,9 @@ class SnakeEnv:
 
         return self._next_point(self.direction)
 
-    # 计算下一步蛇头的坐标，移动身体在step()方法
+    # 计算沿指定绝对方向移动后的蛇头坐标。
     def _next_point(self, direction: Direction) -> Point:
         head = self.snake[0]
-        # 讨论相对于蛇头的方向变动
         if direction == Direction.RIGHT:
             return Point(head.x + 1, head.y)
         if direction == Direction.LEFT:
@@ -571,14 +560,10 @@ class SnakeEnv:
                 return distance / max_distance
         return 1.0
 
-    # 因为它不需要访问当前环境对象 self 里的任何状态
-    # 这个方法根据当前方向和转向，计算新的绝对方向
+    # 根据当前绝对方向和相对转向计算新方向。
     @staticmethod
     def _turn(direction: Direction, turn: int) -> Direction:
-        # direction表示当前的绝对方向，范围0到3; turn表示左转(编码为-1)或右转(编码为1)
-        
         directions = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
-        # 找到当前方向在列表里的位置，例如direction = Direction.RIGHT，则index = 0
         index = directions.index(direction)
         # 当前约定：turn = 1   表示右转；turn = -1  表示左转
         # index + 1，就是顺时针转一次，也就是右转。index - 1就是逆时针转一次，也就是左转。

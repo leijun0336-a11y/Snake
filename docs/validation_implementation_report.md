@@ -1,13 +1,15 @@
 # 阶段验证功能实现报告
 
+> 当前默认值以 `train.py` 的命令行解析为准；本文中的测试数量记录的是该功能最初实现时的验证结果。
+
 ## 功能变更
 
 - best.pt 不再依据训练 mean_score_100，而是依据独立贪心验证。
-- epsilon 到达下限时运行 100 局快速验证和 500 局确认验证，初始化 best.pt。
-- 此后默认每 500 个训练 episode 快速验证一次；只有确认验证通过才更新 best.pt。
+- DQN 在 epsilon 到达下限、PPO 在达到 `min_episodes` 时运行 100 局快速验证和 500 局确认验证，初始化 best.pt。
+- 此后默认每 1000 个训练 episode 快速验证一次；只有确认验证通过才更新 best.pt。
 - 早停改为按阶段验证轮次计数，连续 8 轮无确认提升时，在停止前补做或复用确认验证。
 - target_mean_score 改为使用确认验证均分。
-- latest.pt 始终保存最后训练状态，不会被 best.pt 覆盖。
+- latest.pt 始终保存最近一次模型快照，不会被 best.pt 覆盖；当前不包含完整断点续训状态。
 - 选拔均分现在按 `平均分 / 满分` 比较，并换算到原6×6满分33的等价分数尺度；
   六个历史阈值及其 checkpoint 配置字段保持不变。
 - 当 `full_score == 33` 时直接执行原始均分减法，不增加归一化浮点运算，确保
@@ -27,16 +29,16 @@
 - 新增参数：
 
 ~~~text
---validation-interval 500
+--validation-interval 1000
 --validation-episodes 100
 --confirmation-episodes 500
 --validation-patience 8
---validation-max-steps 1000
+--validation-max-steps 2000
 ~~~
 
 旧的 --patience 和 --min-delta 已移除。
 
-## 验证结果
+## 实现时验证结果
 
 - Ruff：通过。
 - 完整测试：62 passed。

@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-
 WANDB_PROJECT = "Snake"
 WANDB_WORKSPACE = "Snake Training Curves"
 
@@ -52,7 +51,7 @@ def _line_plot(
 
 
 def configure_workspace(entity: str, project: str, run_id: str, run_name: str) -> str:
-    """Create the fixed 2x3 W&B view matching the local training-curves figure."""
+    """Create a two-section W&B workspace for common and algorithm-specific metrics."""
     import wandb_workspaces.reports.v2 as wr
     import wandb_workspaces.workspaces as ws
 
@@ -132,22 +131,22 @@ def configure_workspace(entity: str, project: str, run_id: str, run_name: str) -
     else:
         algorithm_panels = [
             _line_plot(
-            wr,
-            run_id=run_id,
-            title="Epsilon",
-            metrics=["DQN-only/epsilon"],
-            y_axis="Epsilon",
-            colors=["#168c8c"],
-            widths=[2.0],
-        ),
+                wr,
+                run_id=run_id,
+                title="Epsilon",
+                metrics=["DQN-only/epsilon"],
+                y_axis="Epsilon",
+                colors=["#168c8c"],
+                widths=[2.0],
+            ),
             _line_plot(
-            wr,
-            run_id=run_id,
-            title="Replay Buffer Size",
-            metrics=["DQN-only/replay_buffer_size"],
-            y_axis="Transitions",
-            colors=["#596b7d"],
-            widths=[2.0],
+                wr,
+                run_id=run_id,
+                title="Replay Buffer Size",
+                metrics=["DQN-only/replay_buffer_size"],
+                y_axis="Transitions",
+                colors=["#596b7d"],
+                widths=[2.0],
             ),
         ]
         algorithm_section_name = "DQN-only"
@@ -219,7 +218,7 @@ def start_wandb(
     except Exception as exc:
         run.finish(exit_code=1)
         raise RuntimeError(
-            "W&B run started, but the required 2x3 workspace layout could not be configured"
+            "W&B run started, but the required workspace layout could not be configured"
         ) from exc
 
     print(f"wandb_run={run.url}")
@@ -267,9 +266,7 @@ def training_metrics(
     elif algorithm == "ppo":
         if ppo_metrics:
             metrics.update({"loss": loss, "mean_loss_100": mean_loss_100})
-            metrics.update(
-                {f"PPO-only/{name}": value for name, value in ppo_metrics.items()}
-            )
+            metrics.update({f"PPO-only/{name}": value for name, value in ppo_metrics.items()})
     else:
         raise ValueError(f"unsupported algorithm: {algorithm}")
     return metrics

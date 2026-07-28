@@ -59,7 +59,7 @@ def make_solo_app() -> SnakeGameApp:
 
 
 def test_game_speed_has_slow_fine_grained_levels() -> None:
-    assert SnakeGameApp.SPEEDS == tuple(range(1, 21))
+    assert tuple(range(1, 21)) == SnakeGameApp.SPEEDS
     assert GameSettings().tick_rate == 6
 
 

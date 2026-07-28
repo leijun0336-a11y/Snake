@@ -101,8 +101,7 @@ def test_find_latest_checkpoint_does_not_fallback_to_best_pt(tmp_path: Path) -> 
 def test_open_eval_metrics_csv_overwrites_previous_evaluation(tmp_path: Path) -> None:
     csv_path = tmp_path / "eval_metrics.csv"
     csv_path.write_text(
-        "episode,score,steps,score_per_step,max_snake_length\n"
-        "1,99,999,0.099099,102\n",
+        "episode,score,steps,score_per_step,max_snake_length\n1,99,999,0.099099,102\n",
         encoding="utf-8",
     )
 

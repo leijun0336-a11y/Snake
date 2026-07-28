@@ -1,6 +1,8 @@
 # 动态网格 Hybrid Q 网络改造方案
 
-> 状态：已确认并实施。实现结果见 `dynamic_grid_network_implementation_report.md`。
+> 状态：历史改造方案，已实施后继续演进。本文保留当时的 5×5 设计基线，不代表
+> 当前默认值；当前实现默认使用可配置的 3×3 局部分支，并已移除 `Identity`。
+> 现状见 `dynamic_grid_network_implementation_report.md` 和 README。
 
 ## 目标
 

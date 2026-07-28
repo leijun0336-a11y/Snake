@@ -21,11 +21,15 @@ def _unfold_crop(
         kernel_size=crop_size,
     )
     index = positions[:, None, None].expand(-1, patches.shape[1], -1)
-    return patches.gather(2, index).squeeze(2).reshape(
-        batch_size,
-        features.shape[1],
-        crop_size,
-        crop_size,
+    return (
+        patches.gather(2, index)
+        .squeeze(2)
+        .reshape(
+            batch_size,
+            features.shape[1],
+            crop_size,
+            crop_size,
+        )
     )
 
 
@@ -114,9 +118,7 @@ class _ReferenceQNetwork(QNetwork):
     def _spatial_features(self, grid: torch.Tensor) -> torch.Tensor:
         shared = self.cnn(grid)
         global_features = self.global_pool(self.global_projection(shared)).flatten(1)
-        local_features = self._crop_around_head(
-            self.local_projection(shared), grid
-        ).flatten(1)
+        local_features = self._crop_around_head(self.local_projection(shared), grid).flatten(1)
         return torch.cat((global_features, local_features), dim=1)
 
 

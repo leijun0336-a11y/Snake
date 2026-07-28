@@ -1,4 +1,3 @@
-# 处理自引用问题
 from __future__ import annotations
 
 import random
@@ -24,7 +23,7 @@ class DQNAgent:
 
     def __init__(
         self,
-        # 状态维度，如果是vector模式输入向量，CNN模式和hibrid模式都输入网格。
+        # Vector 模式传入向量维度；Grid/Hybrid 模式传入网格形状。
         state_size: int | tuple[int, int, int],
         # 动作数量，当前为 3：直行、右转、左转。
         action_size: int,
@@ -60,7 +59,7 @@ class DQNAgent:
         target_update_interval: int = 1000,
         # 是否使用 Dueling DQN 架构，分离状态值和优势值。
         dueling: bool = True,
-        # 状态输入模式：vector 使用人工低维状态，grid 使用多通道网格状态。
+        # 状态输入模式：vector 使用人工状态，grid 使用网格，hybrid 同时使用两者。
         state_mode: str = "vector",
         # Hybrid 模式下与 CNN 特征拼接的人工状态维度。
         auxiliary_size: int = 20,
@@ -116,13 +115,13 @@ class DQNAgent:
         self.random = random.Random(seed)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
 
-        # 生成随机数种子
+        # 固定网络参数初始化的随机种子。
         torch.manual_seed(seed)
         self.policy_net = self._build_network()
         self.target_net = self._build_network()
-        # load_state_dict() 是一个用来加载模型参数的方法，这里用于参数复制
+        # 目标网络从策略网络的初始参数开始。
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        # 切换到评估模式，关闭dropout和batch_norm，因为目标网络本身不训练只接受参数
+        # 目标网络不参与优化，保持评估模式。
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
@@ -353,15 +352,14 @@ class DQNAgent:
         contiguous_array = np.ascontiguousarray(array)
         return torch.from_numpy(contiguous_array).to(self.device)
 
-    # 把当前训练状态存到文件里
+    # 保存模型权重、架构和部分 Agent 元数据；不包含完整断点续训状态。
     def save(
         self,
         path: str | Path,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         path = Path(path)
-        # 创建保存模型文件所在的文件夹
-        # 如果父目录不存在，连带创建父母，如果当前目录已经存在也不要报错
+        # 确保 checkpoint 的父目录存在。
         path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint = {
             "algorithm": self.ALGORITHM,
@@ -369,7 +367,7 @@ class DQNAgent:
             "policy_net": self.policy_net.state_dict(),
             # 用于计算 DQN 目标值的目标网络参数。
             "target_net": self.target_net.state_dict(),
-            # 当前探索率，恢复训练时可以接着当前探索进度继续。
+            # 保存当前探索率，供加载模型时还原 epsilon 状态；这并不构成完整断点续训。
             "epsilon_start": self.epsilon_start,
             "epsilon": self.epsilon,
             "epsilon_end": self.epsilon_end,

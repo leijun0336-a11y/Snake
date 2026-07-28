@@ -1,52 +1,49 @@
-# 问题
-把“走到即将离开的尾巴位置”误判为死亡。
+# 问题记录
 
-# 解决：
-如果 new_head == food：
-    这一步会吃食物，尾巴不会移动
-    所以不能撞到任何身体部分
+本文记录已经定位或解决过的问题。当前行为以 `src/snake_ai/`、`README.md` 和测试为准。
 
-如果 new_head != food：
-    这一步没吃食物，尾巴会移动走
-    所以允许走到当前尾巴的位置
+## 走到即将离开的尾巴位置被误判为碰撞
 
+**状态：已解决。**
 
-# 问题
-每次训练会直接把上次训练的神经网络权重覆盖，无法保留多个权重，不利于复现以前的实验。
+环境会区分本步是否吃到食物：
 
-解决：修改文件夹结构，按照时间编号实验文件夹，不同的实验下有不同的权重和评估指标的记录。
+- `new_head == food`：蛇会增长，尾巴不会移动，因此蛇头不能进入任何现有身体格；
+- `new_head != food`：尾巴会在本步离开，蛇头可以进入移动前的尾巴格。
 
-# 问题
-训练 grid 版本奇慢无比
+当前判断由 `SnakeEnv._is_collision_after_move()` 统一处理。
 
-原因：
+## 多次训练互相覆盖 checkpoint
 
-grid 模式慢的主因不是状态构造或 ReplayBuffer，而是 CNN 训练路径触发了 PyTorch deterministic CUDA 的慢路径。
+**状态：已解决。**
 
-vector 模式只使用 19 维状态和 MLP，不经过卷积和池化；grid 模式会把 `[5, height, width]` 网格送入 CNN，每个训练 step 都要做卷积、池化和反向传播。之前 `set_seed()` 默认开启：
-
-```python
-torch.use_deterministic_algorithms(True, warn_only=True)
-```
-
-这会强制 CUDA 尽量使用确定性算法。grid CNN 中的 `AdaptiveAvgPool2d` 反向传播会触发类似警告：
+每次训练使用带算法和时间戳的独立目录：
 
 ```text
-adaptive_avg_pool2d_backward_cuda does not have a deterministic implementation
+checkpoints/<algorithm>_<timestamp>/
+runs/<algorithm>_<timestamp>/
 ```
 
-因此训练会避开或限制很多最快的 CUDA 算法，速度可能被大幅拖慢；vector 模式没有这个算子，所以几乎不受影响。
+其中 `latest.pt` 是最近一次模型快照，`best.pt` 由阶段验证选出。当前 checkpoint
+不包含 optimizer、replay/rollout buffer 和随机数状态，因此不能视为完整的断点续训文件。
 
-解决：
+## Grid 模式训练缓慢
 
-1. 训练入口新增 `--deterministic` 参数，默认关闭 deterministic CUDA，优先保证训练速度。只有需要严格复现实验时再显式开启：
+**状态：旧实现问题；原诊断不再代表当前网络。**
 
-```bash
-bash scripts/train_autodl.sh --state-mode grid --deterministic
-```
+旧版本曾使用 19 维 Vector 状态、5 通道 Grid 状态和 `AdaptiveAvgPool2d`。严格
+deterministic CUDA 下，旧池化反向传播可能进入慢路径并产生
+`adaptive_avg_pool2d_backward_cuda` 警告。
 
-2. 在默认 `20x20 -> 5x5` 这种整除池化场景下，把 `AdaptiveAvgPool2d` 替换成等价的 `AvgPool2d`，避开 `adaptive_avg_pool2d_backward_cuda` 的慢路径和警告。
+当前实现已经发生以下变化：
 
-3. 保留数据路径优化作为辅助优化：Grid 状态使用连续 `float32` NumPy 数组；ReplayBuffer 使用固定容量环形列表并按随机索引采样，避免 `random.sample(list(self.memory), 64)` 在经验池很大时每步复制整个 buffer。
+- Vector 状态为 20 维；
+- Grid 状态为 `[9, height, width]`；
+- CNN 不再使用 `AdaptiveAvgPool2d`，全局特征直接保留完整 `H × W` 分辨率；
+- 局部分支默认裁剪蛇头周围 `3 × 3` 特征，可通过参数调整或关闭；
+- Grid 状态使用连续 `float32` NumPy 数组；
+- ReplayBuffer 使用固定容量结构，PER 使用 Sum Tree；
+- `--deterministic` 默认关闭，仅在需要严格复现时显式启用。
 
-
+当前性能问题应基于实际 GPU、棋盘尺寸、batch size 和 deterministic 开关重新测量，
+不能继续归因于已经移除的自适应池化。

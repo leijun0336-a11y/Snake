@@ -1,4 +1,3 @@
-# 处理自引用问题
 from __future__ import annotations
 
 from snake_ai.game.snake_env import Point

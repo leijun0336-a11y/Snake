@@ -1,4 +1,3 @@
-# 处理自引用问题
 from __future__ import annotations
 
 import argparse
@@ -32,7 +31,6 @@ from snake_ai.validation import (
     run_staged_validation,
 )
 from snake_ai.wandb_logging import WandbRun, start_wandb, training_metrics
-
 
 TRAINING_START_DELAY_SECONDS = 5
 
@@ -69,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-mode", choices=("vector", "grid", "hybrid"), default="hybrid")
     # 选奖励配置
     parser.add_argument("--reward-profile", choices=REWARD_PROFILE_NAMES, default="experiment8")
-    # 是否使用势函数进度奖励，默认启用；可通过 --no-potential-reward 关闭(argparse内置方法)。
+    # 是否使用势函数进度奖励，默认启用；可通过 --no-potential-reward 关闭。
     parser.add_argument("--potential-reward", action=argparse.BooleanOptionalAction, default=True)
     # 是否关闭步成本和饥饿成本；关闭后饿死和碰撞的惩罚值统一。
     parser.add_argument("--no-cost-rewards", action="store_true")
@@ -100,7 +98,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--epsilon-exp-factor", type=float, default=TrainConfig.epsilon_exp_factor, metavar="FACTOR"
     )
-    # epsilon 线性降至下限所用局数；默认取最大训练局数的一半。
+    # epsilon 线性降至下限所用局数；当前默认固定为 15000。
     parser.add_argument(
         "--epsilon-linear-episodes",
         type=int,
@@ -458,24 +456,20 @@ def main() -> None:
     ppo_config = build_ppo_config(args)
     set_seed(train_config.seed, deterministic=args.deterministic)
 
-    # 假设你在 2026 年 7 月 7 日 下午 3 点 30 分 45 秒 执行了这行代码
-    # 最后生成的 run_name 字符串就会是"dqn_20260707_153045"
+    # 运行名称由算法和启动时间组成，例如 dqn_20260707_153045。
     run_name = datetime.now().strftime(f"{args.algorithm}_%Y%m%d_%H%M%S")
-    # 定义文件路径。命令行参数里的短横线 - 会自动转换成 Python 属性名里的下划线 _
     run_dir = args.runs_dir / run_name
     # checkpoint 也使用同一个 run_name 分目录保存，避免多次训练互相覆盖 best.pt/latest.pt。
     checkpoint_dir = args.checkpoint_dir / run_name
-    # 创建每次训练过程的文件夹，注意一次训练包含多个episode.
-    # runs侧重记录日志和指标，比如每一局分数 score，最近 100 局平均分 mean_score_100，loss
+    # runs 保存日志和指标；checkpoints 保存可用于加载和推理的模型快照。
     run_dir.mkdir(parents=True, exist_ok=True)
-    # 创建本次训练专属断点文件夹，断点侧重记录模型权重，用于加载模型和继续训练。
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"run_dir={run_dir}")
     print(f"checkpoint_dir={checkpoint_dir}")
     print_stop_overview(args, train_config)
 
-    # 在指定的文件夹（这里是刚才创建的 run_dir）里新建训练日志文件；.train 后缀方便和评估日志区分。
+    # .train 后缀用于区分训练与评估 TensorBoard event。
     writer = SummaryWriter(run_dir, filename_suffix=".train") if SummaryWriter is not None else None
 
     # 训练指标和阶段验证指标分开保存。
@@ -999,7 +993,7 @@ def main() -> None:
                         }
                     )
 
-                # 存下得分最高时的参数
+                # 记录训练阶段出现过的最高单局分数，仅用于诊断，不据此保存 best.pt。
                 if score > best_score:
                     best_score = score
 
@@ -1102,7 +1096,7 @@ def main() -> None:
                     ]
                 metrics.writerow(common_metrics_row + algorithm_metrics_row)
 
-                # 强制将内存缓冲区（Buffer）中的数据立刻写入到实际的硬盘文件中，防止数据丢失
+                # 每局刷新 CSV，降低异常中断时丢失近期指标的风险。
                 file.flush()
 
                 # 存下最近一次episode更新出来的参数
@@ -1111,7 +1105,9 @@ def main() -> None:
                 decision = run_staged_validation(
                     episode=episode,
                     state=validation_state,
-                    evaluator=lambda seed_set: run_validation(episode, seed_set),
+                    evaluator=lambda seed_set, current_episode=episode: run_validation(
+                        current_episode, seed_set
+                    ),
                     interval=args.validation_interval,
                     early_stop_enabled=args.early_stop,
                     min_episodes=args.min_episodes,

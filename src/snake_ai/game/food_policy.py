@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import random
+from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
-from typing import Hashable, Protocol, Sequence, TypeVar
-
+from typing import Protocol, TypeVar
 
 CellT = TypeVar("CellT", bound=Hashable)
 

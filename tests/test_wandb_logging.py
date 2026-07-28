@@ -59,17 +59,17 @@ def test_training_metrics_matches_every_reference_curve() -> None:
 
 
 def test_training_metrics_emits_ppo_diagnostics_only_after_update() -> None:
-    common = dict(
-        episode=3,
-        scores=[1, 2, 6],
-        mean_score_100=3.0,
-        episode_reward=12.5,
-        mean_reward_100=4.5,
-        episode_steps=[10, 20, 30],
-        loss=0.25,
-        mean_loss_100=0.5,
-        algorithm="ppo",
-    )
+    common = {
+        "episode": 3,
+        "scores": [1, 2, 6],
+        "mean_score_100": 3.0,
+        "episode_reward": 12.5,
+        "mean_reward_100": 4.5,
+        "episode_steps": [10, 20, 30],
+        "loss": 0.25,
+        "mean_loss_100": 0.5,
+        "algorithm": "ppo",
+    }
 
     before_update = wandb_logging.training_metrics(**common)
     after_update = wandb_logging.training_metrics(
@@ -141,7 +141,7 @@ def test_start_wandb_does_not_fallback_when_layout_fails(
 
     monkeypatch.setattr(wandb_logging, "configure_workspace", fail_layout)
 
-    with pytest.raises(RuntimeError, match="2x3 workspace layout") as exc_info:
+    with pytest.raises(RuntimeError, match="required workspace layout") as exc_info:
         wandb_logging.start_wandb(
             run_name="dqn_test",
             run_dir=tmp_path,

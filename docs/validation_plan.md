@@ -1,5 +1,8 @@
 # best.pt 与早停阶段验证改造计划
 
+> 状态：已实施。本文已按当前代码更新默认流程；实现结果见
+> `validation_implementation_report.md`。
+
 ## 目标
 
 - best.pt 只由独立、无探索的验证结果决定，不再使用训练阶段的 mean_score_100。
@@ -8,13 +11,13 @@
 
 ## 默认流程
 
-1. 前 50% 训练阶段正常训练，不执行选模验证；latest.pt 继续正常保存。
-2. epsilon 首次降到最低点时，执行 100 局快速验证和 500 局确认验证，初始化 best.pt。
-3. 此后每 500 个训练 episodes 执行 100 局快速验证。
+1. 选模条件满足前正常训练，不执行选模验证；`latest.pt` 继续保存模型快照。
+2. DQN 在 epsilon 首次降到最低点、PPO 在达到 `min_episodes` 时，执行 100 局快速验证和 500 局确认验证，初始化 `best.pt`。
+3. 此后每 1000 个训练 episodes 执行 100 局快速验证。
 4. 快速验证达到候选门槛时，再执行 500 局确认验证。
 5. 只有确认验证通过时才更新 best.pt。
 
-验证统一采用：关闭 epsilon 探索、无渲染、不训练、不写 replay buffer、固定种子、最多 1000 步，并与 evaluate.py 的 6×6 正式评估口径一致。
+验证统一采用：贪心策略、无渲染、不训练、不写 replay buffer、关闭饥饿机制、固定种子、每局最多 2000 步。正式评估复用相同的策略执行核心，但拥有独立种子集和自己的默认步数上限。
 
 ## 模型选择规则
 
@@ -27,8 +30,8 @@
 
 ## 早停规则
 
-- --early-stop 仍为显式开启，默认不早停。
-- epsilon 到达最低点且满足 min_episodes 后才允许早停。
+- `--early-stop` 默认开启，可用 `--no-early-stop` 关闭。
+- DQN 在 epsilon 到达最低点且满足 `min_episodes` 后、PPO 在达到 `min_episodes` 后才允许早停。
 - 连续 8 次阶段验证没有产生经过确认的新 best.pt 时，进入早停候选状态。
 - 真正停止前，再对当前模型执行一次 500 局确认验证；若仍不能更新 best，才停止训练。
 - target_mean_score 改为依据确认验证平均分，而不是训练 mean_score_100。
@@ -45,11 +48,11 @@
 ## 默认新增参数
 
 ~~~text
---validation-interval 500
+--validation-interval 1000
 --validation-episodes 100
 --confirmation-episodes 500
 --validation-patience 8
---validation-max-steps 1000
+--validation-max-steps 2000
 ~~~
 
 这些参数只控制验证，不计入 --max-episodes，也不改变 epsilon 和训练环境状态。
@@ -60,9 +63,9 @@
 - 相同 checkpoint 和种子集重复验证结果完全一致。
 - 未通过确认验证的模型不能覆盖 best.pt。
 - 早停只按阶段验证轮次计算，并在停止前完成最终确认。
-- latest.pt 始终保留最后训练状态，不被 best.pt 覆盖。
+- `latest.pt` 始终保留最近一次模型快照，不被 `best.pt` 覆盖；它不是完整的断点续训状态。
 - 完整测试和 Ruff 检查通过。
 
 ## 范围说明
 
-本次改造不修改奖励函数、reward profile、网络结构及现有训练超参数。发现任何配置冲突时应直接报错或告知，不进行静默 fallback。得到确认后再实施代码修改。
+本次改造不修改奖励函数、reward profile 和网络结构。发现配置冲突时应直接报错，不进行静默 fallback。

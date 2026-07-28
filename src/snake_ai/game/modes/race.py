@@ -9,7 +9,6 @@ from snake_ai.game.food_policy import SeededRaceFoodPolicy
 from snake_ai.game.session import GameSession
 from snake_ai.game.snake_env import SnakeEnv
 
-
 RaceWinner = Literal["player", "ai", "draw"]
 
 

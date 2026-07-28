@@ -1,8 +1,5 @@
-# 运行方法: uv run src/snake_ai/evaluate.py
-# 如果要可视化 --tensorboard
-# 默认会渲染，不想渲染可以加上 --no-render
-
-# 处理自引用问题
+# 推荐运行方式：uv run --extra cpu python -m snake_ai.evaluate
+# 默认启用 Pygame 渲染；--no-render 关闭画面，--tensorboard 另行写入评估日志。
 from __future__ import annotations
 
 import argparse
@@ -17,7 +14,6 @@ from snake_ai.config import CHECKPOINT_DIR, RUNS_DIR, EnvConfig, TrainConfig
 from snake_ai.game import SnakeEnv
 from snake_ai.utils import set_seed, summarize_values
 from snake_ai.validation import ValidationEpisode, evaluate_policy, make_episode_seeds
-
 
 EVAL_METRICS_HEADER = (
     "episode",
@@ -79,7 +75,7 @@ def find_latest_run_dir(runs_dir: Path = RUNS_DIR, algorithm: str | None = None)
     return max(run_dirs, key=_experiment_timestamp)
 
 
-# 默认提取最近一次实验的权重，权重默认取latest.pt，若没有latest.pt则取best.pt
+# 默认读取最近一次实验目录中的 latest.pt；文件缺失时明确报错，不回退到 best.pt。
 def find_latest_checkpoint(
     checkpoint_dir: Path = CHECKPOINT_DIR,
     algorithm: str | None = None,
@@ -281,22 +277,24 @@ def main() -> None:
         # 与训练保持一致，由环境直接返回 checkpoint 所需模式的 observation。
         state_mode=state_mode,
     )
-    common_agent_kwargs = dict(
+    common_agent_kwargs = {
         # 状态维度
-        state_size=(env.grid_state_shape if state_mode in ("grid", "hybrid") else env.state_size),
+        "state_size": (
+            env.grid_state_shape if state_mode in ("grid", "hybrid") else env.state_size
+        ),
         # 动作维度
-        action_size=env.action_size,
-        hidden_size=train_config.hidden_size,
-        state_mode=state_mode,
+        "action_size": env.action_size,
+        "hidden_size": train_config.hidden_size,
+        "state_mode": state_mode,
         # load() 会在必要时使用 checkpoint 中的 CNN 参数重建当前默认网络。
-        auxiliary_size=env.state_size,
-        cnn_channels=train_config.cnn_channels,
-        cnn_output_channels=train_config.cnn_output_channels,
-        cnn_dilations=train_config.cnn_dilations,
-        local_crop_size=train_config.local_crop_size,
-        use_local_crop=train_config.use_local_crop,
-        seed=train_config.seed,
-    )
+        "auxiliary_size": env.state_size,
+        "cnn_channels": train_config.cnn_channels,
+        "cnn_output_channels": train_config.cnn_output_channels,
+        "cnn_dilations": train_config.cnn_dilations,
+        "local_crop_size": train_config.local_crop_size,
+        "use_local_crop": train_config.use_local_crop,
+        "seed": train_config.seed,
+    }
     if algorithm == "ppo":
         agent = PPOAgent(**common_agent_kwargs, argmax_cycle_fallback=args.argmax_cycle_fallback)
     else:

@@ -190,8 +190,7 @@ class PPOAgent:
             use_local_crop=self.use_local_crop,
         ).to(self.device)
 
-    # PPO的动作采样，训练时输出概率分布，基于概率分布随机采样。
-    # 评估时采用确定性采样，直接采样概率最高的；如果开启兜底则强制避免绕圈。
+    # 训练时按策略分布采样；评估时选择最大 logit，可选循环状态的备选动作回退。
     def act(self, state: Any, training: bool = True) -> int:
         with torch.no_grad():
             logits, _ = self.policy_net(self._state_batch_to_tensor([state]))
@@ -210,9 +209,8 @@ class PPOAgent:
             fallback_rank = 1 + (previous_visits - 1) % (self.action_size - 1)
             return int(ranked_actions[fallback_rank].item())
 
-    # 负责每局线性退火的 entropy coefficient
+    # 按 episode 线性退火 entropy coefficient。
     def set_entropy_for_episode(self, episode: int) -> float:
-        
         if episode < 1:
             raise ValueError("episode must be at least 1")
         if self.entropy_anneal_episodes == 1:
@@ -227,16 +225,16 @@ class PPOAgent:
         )
         return self.entropy_coefficient
 
-    # 专门给cycle_fallback的工具函数。
+    # 每个评估 episode 开始时清空循环状态访问记录。
     def reset_evaluation_state(self) -> None:
         self._evaluation_state_visits.clear()
 
-    # # 专门给cycle_fallback的工具函数。
+    # 将完整 observation 转换为可重复比较的键。
     def _evaluation_state_key(self, state: Any) -> bytes:
         parts = state if self.state_mode == "hybrid" else (state,)
         return b"".join(np.ascontiguousarray(part, dtype=np.float32).tobytes() for part in parts)
 
-    # 装一个transition到rollout buffer中。
+    # 计算当前策略下的 log-prob/value，并写入 rollout buffer。
     def remember(
         self,
         state: Any,
@@ -245,8 +243,7 @@ class PPOAgent:
         next_state: Any,
         done: bool,
     ) -> None:
-        # 这段在补算 act() 时被丢弃的两个关键值。
-        # act() 也调了一次 policy_net，拿到了 logits 和 value，但它只用了 logits（采样或 argmax），value 直接扔掉了。
+        # 当前接口的 act() 只返回动作，因此这里重新计算训练更新所需的 log-prob 和 value。
         with torch.no_grad():
             logits, value = self.policy_net(self._state_batch_to_tensor([state]))
             distribution = Categorical(logits=logits)

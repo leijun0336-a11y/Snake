@@ -141,6 +141,7 @@ def test_wall_collision_ends_episode() -> None:
     assert done is True
     assert reward == -100.0
 
+
 def test_can_move_into_current_tail_when_not_eating() -> None:
     env = SnakeEnv(
         width=6,
@@ -308,10 +309,7 @@ def test_eating_food_reports_components_and_resets_hunger() -> None:
     assert env.steps_since_food == 0
     assert info["reward_food"] == 10.0
     assert info["reward_hunger"] == 0.0
-    assert reward == pytest.approx(
-        float(info["reward_food"])
-        + float(info["reward_progress"])
-    )
+    assert reward == pytest.approx(float(info["reward_food"]) + float(info["reward_progress"]))
     assert info["reward_step"] == 0.0
 
 
@@ -320,10 +318,7 @@ def test_completing_board_has_total_reward_of_one_hundred() -> None:
     food = Point(4, 4)
     head = Point(3, 4)
     env.snake = [head] + [
-        Point(x, y)
-        for y in range(5)
-        for x in range(5)
-        if Point(x, y) not in (head, food)
+        Point(x, y) for y in range(5) for x in range(5) if Point(x, y) not in (head, food)
     ]
     env.direction = Direction.RIGHT
     env.food = food
@@ -337,4 +332,3 @@ def test_completing_board_has_total_reward_of_one_hundred() -> None:
     assert info["reward_terminal"] == 90.0
     assert info["reward_step"] == 0.0
     assert reward == pytest.approx(100.0)
-

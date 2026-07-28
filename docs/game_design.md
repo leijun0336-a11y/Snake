@@ -1,12 +1,14 @@
 # Snake AI 游戏化设计
 
+> 状态：MVP 已实施，本文中的注册表和验收说明已按当前代码更新。
+
 ## 1. 产品定位
 
 将当前强化学习演示项目包装成一款简洁的 2D 贪吃蛇游戏。首版突出“玩家游玩”“观察 AI”和“双棋盘人机竞速”三种体验，同时保留训练、评估与后续玩法的扩展能力。
 
 技术路线继续使用 Python、Pygame 和现有 PyTorch 模型，不改变 `SnakeEnv` 的训练接口。
 
-首版统一使用 `6 × 6` 棋盘，AI 注册表中暂时只有当前最新实验 `dqn_20260715_091735` 验证选出的 `best.pt`。首版不提供 AI、难度、checkpoint 选择或模型切换界面，但底层按多 AI 扩展设计。
+首版统一使用 `6 × 6` 棋盘，AI 注册表当前只有实验 `dqn_20260722_201922` 验证选出的 `best.pt`。前端不提供 AI、难度、checkpoint 选择或模型切换界面，但底层按多 AI 扩展设计。仓库不包含被忽略的 `checkpoints/` 目录，使用 AI 模式前需自行准备该模型文件。
 
 ## 2. 设计原则
 
@@ -171,22 +173,24 @@ class AIProfile:
     state_mode: str
     width: int
     height: int
+    reward_profile: str
 
 
 AI_PROFILES = {
-    "experiment_20260715": AIProfile(
-        id="experiment_20260715",
+    "dqn_20260722_201922": AIProfile(
+        id="dqn_20260722_201922",
         display_name="Snake AI",
         checkpoint_path=(
-            CHECKPOINT_DIR / "dqn_20260715_091735" / "best.pt"
+            CHECKPOINT_DIR / "dqn_20260722_201922" / "best.pt"
         ),
         state_mode="hybrid",
         width=6,
         height=6,
+        reward_profile="experiment8",
     ),
 }
 
-DEFAULT_AI_ID = "experiment_20260715"
+DEFAULT_AI_ID = "dqn_20260722_201922"
 ```
 
 `DQNController` 通过构造参数接收 `AIProfile`，`RaceMode` 只依赖 Controller 接口。首版从 `DEFAULT_AI_ID` 取得唯一 AI，并缓存、复用对应推理实例。启动 AI 模式时先校验 checkpoint 元数据与 Profile，不兼容或文件缺失时显示明确错误并返回菜单。
@@ -295,7 +299,7 @@ food = candidate_order 中第一个未被当前蛇占据的格子
 ## 10. 首版验收标准
 
 - 玩家可以从主菜单开始一局游戏并正常结算、重开或返回。
-- AI 观察和竞速模式只使用 `dqn_20260715_091735/best.pt`，且不会写入训练数据。
+- AI 观察和竞速模式只使用 `dqn_20260722_201922/best.pt`，且不会写入训练数据。
 - checkpoint 路径只存在于 `AI_PROFILES`，Controller、Mode 和 Scene 不硬编码具体模型。
 - 人机竞速中双方由同一比赛时钟驱动，每个逻辑 tick 各推进一次。
 - 玩家、AI 观察和竞速模式均不因饥饿终止，训练环境原有规则不变。

@@ -8,7 +8,6 @@ from typing import Any, Literal, Protocol
 
 from snake_ai.game import SnakeEnv
 
-
 # 指定的验证集名称。
 SeedSetName = Literal["quick", "confirmation", "final"]
 
@@ -25,7 +24,7 @@ SEED_SET_INDEX: dict[SeedSetName, int] = {
 }
 
 
-#  规定“符合要求的智能体”必须具备哪些属性和方法。
+# 验证所需的最小 Agent 接口。
 class GreedyAgent(Protocol):
     policy_net: Any
 
@@ -103,9 +102,7 @@ class StagedValidationState:
 
 @dataclass(frozen=True)
 class StagedValidationDecision:
-    # 本轮分阶段验证产生的事件集合。比如当前这一局既进行了快速验证，又进行了确认验证，那么 events 就会包含两个 ValidationEvent 对象。
-    # 一个长度不限的元组，并且每个元素都是 ValidationEvent.
-    # ... 不是省略方法实现，而是元组类型语法，表示前面的元素类型可以重复任意次。
+    # 本轮可能依次产生 quick、confirmation 或 early-stop confirmation 事件。
     events: tuple[ValidationEvent, ...] = ()
     best_updated: bool = False
     stop_reason: Literal["target_validation", "validation_patience"] | None = None
@@ -125,7 +122,7 @@ def make_episode_seeds(
             f"validation episodes must be less than {SEED_SET_STRIDE} to keep seed sets disjoint"
         )
 
-    # 种子计算方法：基础种子值+之前定义的种子集合索引*步长
+    # 不同集合使用相隔 SEED_SET_STRIDE 的确定性种子区间。
     start = base_seed + SEED_SET_INDEX[seed_set] * SEED_SET_STRIDE
     # 返回一个元组，包含从 start 开始的连续整数，长度为 episodes
     # 例如，如果 base_seed=1000, seed_set='quick', episodes=5, 那么返回的元组将是 (1000000, 1000001, 1000002, 1000003, 1000004)

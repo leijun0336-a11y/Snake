@@ -55,12 +55,19 @@ src/snake_ai/
 │   ├── ppo_agent.py       # PPO、GAE、Actor-Critic、checkpoint
 │   └── replay_buffer.py   # 固定容量经验回放
 ├── game/
-│   ├── snake_env.py       # 环境、状态编码、奖励与终止规则
-│   └── renderer.py        # pygame 渲染
+│   ├── modes/             # Solo、AI Viewer 与 Race 模式
+│   ├── ai_profiles.py     # 游戏内 AI 注册表
+│   ├── controllers.py     # 玩家与 DQN 控制器
+│   ├── food_policy.py     # 随机与竞速食物策略
+│   ├── game_app.py        # Pygame 应用入口
+│   ├── session.py         # 单局状态与步进
+│   └── snake_env.py       # 环境、状态编码、奖励与终止规则
 ├── models/
 │   └── q_network.py       # 当前 architecture v3
+├── ui/                    # 音频、主题、组件和棋盘渲染
 ├── config.py              # 环境、训练与奖励 profile
 ├── validation.py          # 固定种子评估与阶段验证调度
+├── wandb_logging.py       # W&B 指标与工作区布局
 ├── train.py               # 训练入口
 ├── evaluate.py            # 独立评估入口
 └── utils.py               # 随机种子与统计工具
@@ -72,10 +79,10 @@ scripts/
 
 ## 安装与测试
 
-项目要求 Python 3.12+。游戏环境与 GPU 训练环境使用互斥的 PyTorch 依赖，避免训练时误用 CPU 版。
+项目要求 Python 3.12+。CPU 与 CUDA 12.4 版 PyTorch 通过互斥的可选依赖安装：
 
 - 只运行游戏、加载 checkpoint、观看 AI 或进行评估推理时，使用 `--extra cpu`；
-- 使用 NVIDIA GPU 训练时，使用 `--extra cu124`；训练代码会检查 CUDA 是否可用，不能使用 CPU 版 Torch 替代；
+- 使用 NVIDIA GPU 训练时，使用 `--extra cu124`；
 - 已经通过某一种 extra 创建好虚拟环境后，后续命令仍建议显式保留对应的 `--extra`，以保证依赖选择与用途一致。
 
 只运行游戏、加载 checkpoint 和进行 AI 推理时：
@@ -85,7 +92,10 @@ uv sync --extra cpu
 uv run --extra cpu pytest
 ```
 
-> **PyTorch 版本说明：**当前 AutoDL 训练使用 CUDA 12.4 对应的 `cu124`，`cpu` 与 `cu124` 不能同时选择。训练时 CUDA 检查失败会直接停止，不会退回 CPU 训练。
+> **设备选择说明：**训练入口本身优先使用 CUDA，并在 CUDA 不可用时退回 CPU。Windows
+> `train_autodl.ps1` 会选择 `cu124` 并检查 CUDA；Linux `train_autodl.sh` 只检查当前
+> 环境，不会自动选择 extra。需要严格使用 GPU 时，推荐使用下面的显式 `--extra cu124`
+> 命令并先检查 `torch.cuda.is_available()`。
 
 ```bash
 uv sync --extra cu124
@@ -115,6 +125,9 @@ uv run --extra cpu python -m snake_ai.game.game_app
 
 当前唯一 AI（ID：`dqn_20260722_201922`）固定加载 `checkpoints/dqn_20260722_201922/best.pt`。加载过程严格校验棋盘、状态模式、奖励配置和 checkpoint 架构；文件缺失或配置不匹配时会明确报错，不会切换到其他权重。
 
+仓库不包含 `checkpoints/` 下的模型文件。`PLAY SOLO` 不依赖 checkpoint；使用
+`WATCH AI` 或 `HUMAN VS AI` 前，需要自行把对应模型放到上述路径。
+
 AI checkpoint 会在主菜单首帧显示后于后台预加载；首次点击 AI 模式时若尚未完成，会显示加载界面，避免阻塞主菜单响应。
 
 ## 训练
@@ -133,10 +146,10 @@ uv run --extra cu124 python -m snake_ai.train --algorithm ppo --reward-profile e
 
 PPO 默认使用 `2048` 步 rollout、`128` minibatch、`4` 个 update epochs、`GAE λ=0.95`、`clip=0.2` 和 `target KL=0.02`。entropy coefficient 从首局的 `0.05` 线性退火到 `0.001`：未开启早停时默认在 `max-episodes` 结束退火，开启早停时默认在 `min-episodes` 结束退火；可用 `--ppo-entropy-anneal-episodes` 显式覆盖。`experiment_ppo` 的进食奖励为 `4.0`，碰撞惩罚保持 `-4.0`。公共 `--learning-rate` 默认仍为 `1e-4`。
 
-按最新一次 10×10 实验配置运行 PPO（仅替换算法和算法专属参数，学习率采用当前公共默认值）：
+按最新一次 10×10 实验配置直接运行 PPO（仅替换算法和算法专属参数，学习率采用当前公共默认值）：
 
 ```bash
-bash scripts/train_autodl.sh \
+uv run --extra cu124 python -m snake_ai.train \
   --algorithm ppo \
   --width 10 --height 10 \
   --state-mode hybrid \
@@ -181,7 +194,7 @@ uv run --extra cu124 python -m snake_ai.train --no-PER
 uv run --extra cu124 python -m snake_ai.train --wandb
 ```
 
-启用后，run 会实时写入项目 `Snake`，并为该 run 创建一个固定的 `2 列 × 3 行` saved view。若 W&B 登录、网络或工作区布局配置失败，训练会明确报错并停止，不会退回自动生成的散乱面板。
+启用后，run 会实时写入项目 `Snake`，并创建两个两列布局的 section：四个公共面板使用 `2 × 2`，算法专属面板按数量自动计算行数。若 W&B 登录、网络或工作区布局配置失败，训练会明确报错并停止，不会退回自动生成的面板。
 
 三种状态模式：
 
@@ -256,7 +269,7 @@ flowchart TB
     subgraph HYBRIDHEAD["Hybrid 决策路径"]
         AUX["人工状态 [B,20]"]
         HF["拼接 [B,8HW+92]"]
-        HFC["Linear (8HW+220)→256 + ReLU"]
+        HFC["Linear (8HW+92)→256 + ReLU"]
         AUX --> HF --> HFC
     end
 
@@ -357,9 +370,10 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 
 - Actor-Critic 复用 Dueling DQN 完全相同的 Vector/Grid/Hybrid 特征编码和等形双分支；Actor 输出三个离散动作的 logits，Critic 输出状态价值。
 - 训练动作从 `Categorical` 策略采样，验证和评估固定使用最大 logits 动作。
-- rollout 满 `--ppo-rollout-steps` 后，使用 GAE、clipped policy objective、clipped value loss、entropy bonus 和 advantage normalization 更新。
+- rollout 满 `--ppo-rollout-steps` 后，使用 GAE、clipped policy objective、clipped value loss 和 entropy bonus 更新。
+- 默认同时对当前 rollout 的 advantage 和 return 做 z-score；可分别通过 `--no-ppo-normalize-advantage` 和 `--no-ppo-normalize-returns` 关闭。
 - 真实终止不 bootstrap；训练步数截断会 bootstrap Critic，但 GAE 不跨 reset 传播。
-- 环境 reward 不做 clipping 或 normalization，保持与 DQN 实验相同的奖励语义。
+- 环境返回的 reward 不做 clipping 或 normalization；上述 return normalization 只发生在 PPO 更新阶段。
 
 ### 奖励配置
 
@@ -416,10 +430,10 @@ runs/<run_name>/validation_metrics.csv
 runs/<run_name>/events...train
 ```
 
-- `latest.pt` 保存最近的训练状态。
-- Epsilon 首次到达下限时，运行 100 局 quick 与 500 局 confirmation 验证，并建立首个 best。
+- `latest.pt` 保存最近一次模型快照和部分 Agent 状态，但不包含 optimizer、replay/rollout buffer 或随机数状态，当前不支持完整断点续训。
+- DQN 在 epsilon 首次到达下限时、PPO 在达到 `--min-episodes` 时，运行 100 局 quick 与 500 局 confirmation 验证，并建立首个 best。
 - 之后默认每 1000 个训练 episode 运行 quick；通过筛选后才进入 confirmation。
-- quick 和 confirmation 默认每局最多执行 `2000` 步，可用 `--validation-max-steps` 修改；提前碰撞、饿死或占满棋盘仍会立即结束。
+- quick 和 confirmation 默认每局最多执行 `2000` 步，可用 `--validation-max-steps` 修改。验证环境关闭饥饿机制，因此只会因碰撞、占满棋盘或达到验证步数上限结束。
 - quick/confirmation 的均分差先除以各自棋盘满分，再换算为6×6满分33的等价分差；
   因此同一套选拔阈值可以用于不同网格。6×6直接使用原始均分差，行为与历史实现一致。
 - 验证使用独立环境、固定且互不重叠的逐局种子，不写 replay buffer，也不改变训练网络状态。
@@ -428,7 +442,7 @@ runs/<run_name>/events...train
 
 ## 评估
 
-默认在 `dqn_*` 和 `ppo_*` 中加载时间戳最新实验的 `latest.pt`，再根据 checkpoint 的 `algorithm` 自动创建对应 agent。评估默认运行 1000 局、每局最多执行 1000 步，并打开 pygame：
+默认在 `dqn_*` 和 `ppo_*` 中加载时间戳最新实验的 `latest.pt`，再根据 checkpoint 的 `algorithm` 自动创建对应 agent。评估默认运行 2000 局、每局最多执行 1000 步，并打开 pygame：
 
 ```bash
 uv run --extra cpu python -m snake_ai.evaluate
@@ -460,7 +474,7 @@ uv run --extra cpu python -m snake_ai.evaluate --no-render --tensorboard
 
 评估会从 checkpoint 自动读取算法、`state_mode` 和完整 `run_config` 中的棋盘尺寸；显式传入 `--width/--height` 时可覆盖尺寸，但必须与 checkpoint 的 `state_size` 一致。缺少 `algorithm` 的历史 checkpoint 按 DQN 处理。
 
-DQN checkpoint 使用 `architecture_version=3`，PPO checkpoint 使用独立的 `architecture_version=1`；两者都要求架构元数据完整，不会猜测缺失字段或回退到历史网络。旧 checkpoint 仍可作为实验档案保留，需要评估时应使用与其匹配的历史 Git 版本。
+DQN checkpoint 使用 `architecture_version=3`，PPO checkpoint 使用独立的 `architecture_version=1`。加载器要求核心架构元数据完整；同版本但缺少 `local_crop_size` 或 `use_local_crop` 的历史 checkpoint 会按启用 `5 × 5` 局部分支处理。其他架构版本不会自动迁移，需要使用与其匹配的历史 Git 版本。
 
 ## 日志、TensorBoard 与 W&B
 

@@ -1,5 +1,7 @@
 # Snake AI 游戏化 MVP 实现报告
 
+> 当前注册表和启动行为已按现有代码更新；测试数量记录的是 MVP 初次实现时的结果。
+
 ## 1. 完成结果
 
 本次实现将原有训练/评估项目扩展为可直接启动的 Pygame 游戏，同时保持 `SnakeEnv` 原有训练调用兼容。
@@ -53,7 +55,7 @@ uv run --extra cpu python -m snake_ai.game.game_app
 
 玩家单人和人机竞速模式每次开局（包括 `PLAY AGAIN`）都有 3 秒倒计时，倒计时期间接收方向输入。AI checkpoint 在主菜单首帧后后台预加载；若尚未完成则显示加载界面，避免同步加载阻塞菜单。
 
-PyTorch 使用互斥的 `cpu` 与 `cu124` 可选依赖。`uv run --extra cpu snake-play` 会在首次运行时同步 CPU 游戏环境；Windows 用户也可以双击根目录的 `start_game.bat`。AutoDL 训练脚本固定选择 CUDA 12.4 的 `cu124` 环境并验证 CUDA 可用，验证失败时直接终止，不会退回 CPU 训练。
+PyTorch 使用互斥的 `cpu` 与 `cu124` 可选依赖。`uv run --extra cpu snake-play` 会在首次运行时同步 CPU 游戏环境；Windows 用户也可以双击根目录的 `start_game.bat`。Windows AutoDL 脚本显式选择 `cu124` 并验证 CUDA；Linux 脚本只同步默认依赖并检查当前环境，不会自动选择 PyTorch extra。
 
 ## 3. 游戏规则
 
@@ -72,8 +74,8 @@ PyTorch 使用互斥的 `cpu` 与 `cu124` 可选依赖。`uv run --extra cpu sna
 当前注册表只有一个 AI：
 
 ```text
-profile_id: experiment_20260715
-checkpoint: checkpoints/dqn_20260715_091735/best.pt
+profile_id: dqn_20260722_201922
+checkpoint: checkpoints/dqn_20260722_201922/best.pt
 state_mode: hybrid
 network: q_network
 board: 6 × 6
@@ -173,7 +175,7 @@ tests/test_gameplay.py
 
 命令入口在 `pyproject.toml` 中注册为 `snake-play`。
 
-## 6. 验证结果
+## 6. 初次实现时的验证结果
 
 执行：
 
@@ -187,7 +189,7 @@ python -m pytest -q -p no:cacheprovider
 - Ruff：通过；
 - Pytest：`87 passed`；
 - Pygame 无窗口烟雾测试：单人、AI 观察和人机竞速均能创建、推进和渲染；
-- 真实 `dqn_20260715_091735/best.pt`：严格加载并成功输出动作。
+- 当时注册的真实 checkpoint：严格加载并成功输出动作。
 
 Pytest 仅报告 Pygame 间接使用 `pkg_resources` 的弃用警告，不影响本次功能。
 

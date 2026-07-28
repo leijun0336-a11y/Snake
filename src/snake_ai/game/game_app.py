@@ -114,16 +114,22 @@ class SnakeGameApp:
                 self.scene = AppScene.MENU
                 return
 
-        if self.scene == AppScene.LOADING and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                self.pending_mode = None
-                self.scene = AppScene.MENU
-                return
+        if (
+            self.scene == AppScene.LOADING
+            and event.type == pygame.KEYDOWN
+            and event.key == pygame.K_ESCAPE
+        ):
+            self.pending_mode = None
+            self.scene = AppScene.MENU
+            return
 
-        if self.scene == AppScene.RULES and event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                self.scene = self.rules_return_scene
-                return
+        if (
+            self.scene == AppScene.RULES
+            and event.type == pygame.KEYDOWN
+            and event.key == pygame.K_ESCAPE
+        ):
+            self.scene = self.rules_return_scene
+            return
 
         for button in self._buttons():
             if button.clicked(event):
@@ -131,9 +137,12 @@ class SnakeGameApp:
                 self._perform(button.action)
                 return
 
-        if self.scene == AppScene.PAUSED and event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_p, pygame.K_ESCAPE):
-                self.scene = AppScene.PLAYING
+        if (
+            self.scene == AppScene.PAUSED
+            and event.type == pygame.KEYDOWN
+            and event.key in (pygame.K_p, pygame.K_ESCAPE)
+        ):
+            self.scene = AppScene.PLAYING
 
     def _perform(self, action: str) -> None:
         if action == "solo":

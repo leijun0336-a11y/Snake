@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 RUNS_DIR = PROJECT_ROOT / "runs"
@@ -89,7 +88,7 @@ EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     starvation_limit_mode="board_area",
     # 饿死的边界比较为大于上限，等于上限时不算饿死。
     starvation_comparison="gt",
-    # 用来记录这套历史奖励配置所依据的 Git 源码版本的commit id.
+    # 该历史奖励配置所依据的 Git revision。
     historical_source_revision="62ff05d5a8d7b65472a984e56647f2c20bceb915",
 )
 
@@ -145,7 +144,7 @@ class EnvConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     episodes: int = 40000
-    # 实际不在这里生效，而是在train.py中的代码中设置的。
+    # reference profile 未显式覆盖时使用该单局步数上限；experiment8/experiment_ppo 默认不设上限。
     max_steps_per_episode: int | None = 500
     batch_size: int = 128
     gamma: float = 0.99
@@ -188,11 +187,11 @@ class PPOConfig:
     clip_coefficient: float = 0.2
     # PPO 对价值函数的 clip range，通常在 0.1~0.3 之间。价值也会间接影响策略。
     value_clip_coefficient: float = 0.2
-    # PPO的策略熵初始值。
+    # PPO 策略熵系数的初始值。
     entropy_coefficient: float = 0.05
-    # PPO策略熵衰减后的最终值。
+    # PPO 策略熵系数衰减后的最终值。
     entropy_coefficient_end: float = 0.001
-    # PPO策略熵线性衰减到什么位置。
+    # PPO 策略熵系数完成线性衰减所用的 episode 数；None 表示由训练入口推导。
     entropy_anneal_episodes: int | None = None
     value_loss_coefficient: float = 0.5
     max_grad_norm: float = 0.5
