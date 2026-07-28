@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import torch
@@ -15,6 +15,8 @@ from snake_ai.agents.replay_buffer import (
     Transition,
 )
 from snake_ai.models.q_network import QNetwork
+
+EpsilonDecayUnit = Literal["step", "episode"]
 
 
 class DQNAgent:
@@ -53,6 +55,10 @@ class DQNAgent:
         epsilon_exp_decay: bool = False,
         # 每局结束后 epsilon 的指数衰减系数；仅在指数衰减模式下使用。
         epsilon_exp_factor: float = 0.995,
+        # 线性衰减的计数单位；指数衰减始终按 episode 执行。
+        epsilon_decay_unit: EpsilonDecayUnit = "step",
+        # 按环境 step 线性衰减到 epsilon_end 需要的步数。
+        epsilon_linear_steps: int = 300_000,
         # 线性衰减到 epsilon_end 需要的 episode 数。
         epsilon_linear_episodes: int = 15_000,
         # 每隔多少次学习步骤，把 policy_net 的参数复制一份给 target_net.
@@ -108,7 +114,18 @@ class DQNAgent:
         self.epsilon_end = epsilon_end
         self.epsilon_exp_decay = epsilon_exp_decay
         self.epsilon_exp_factor = epsilon_exp_factor
+        if epsilon_decay_unit not in ("step", "episode"):
+            raise ValueError("epsilon_decay_unit must be 'step' or 'episode'")
+        if epsilon_linear_steps < 1:
+            raise ValueError("epsilon_linear_steps must be at least 1")
+        if epsilon_linear_episodes < 1:
+            raise ValueError("epsilon_linear_episodes must be at least 1")
+        self.epsilon_decay_unit: EpsilonDecayUnit = (
+            "episode" if epsilon_exp_decay else epsilon_decay_unit
+        )
+        self.epsilon_linear_steps = epsilon_linear_steps
         self.epsilon_linear_episodes = epsilon_linear_episodes
+        self.environment_steps = 0
         self.target_update_interval = target_update_interval
         self.dueling = dueling
         self.learn_steps = 0
@@ -290,14 +307,27 @@ class DQNAgent:
         bootstrap_discounts = torch.pow(gamma_tensor, sampled_n_steps)
         return rewards + bootstrap_discounts * next_q * (1.0 - dones)
 
-    # 逐渐减少随机探索，让智能体从“多尝试”过渡到“多利用已学到的策略”
+    def advance_environment_step(self) -> None:
+        """记录一个训练环境步，并在 step 模式下更新 epsilon。"""
+
+        self.environment_steps += 1
+        if not self.epsilon_exp_decay and self.epsilon_decay_unit == "step":
+            self.decay_epsilon()
+
+    # 逐渐减少随机探索，让智能体从“多尝试”过渡到“多利用已学到的策略”。
     def decay_epsilon(self, episode: int | None = None) -> None:
         if self.epsilon_exp_decay:
             self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_exp_factor)
             return
-        if episode is None:
-            raise ValueError("episode is required when using linear epsilon decay")
-        progress = min(max(episode, 0) / self.epsilon_linear_episodes, 1.0)
+        if self.epsilon_decay_unit == "step":
+            progress_value = self.environment_steps
+            decay_duration = self.epsilon_linear_steps
+        else:
+            if episode is None:
+                raise ValueError("episode is required when using episode-based epsilon decay")
+            progress_value = episode
+            decay_duration = self.epsilon_linear_episodes
+        progress = min(max(progress_value, 0) / decay_duration, 1.0)
         epsilon_range = self.epsilon_start - self.epsilon_end
         self.epsilon = max(self.epsilon_end, self.epsilon_start - epsilon_range * progress)
 
@@ -373,7 +403,10 @@ class DQNAgent:
             "epsilon_end": self.epsilon_end,
             "epsilon_exp_decay": self.epsilon_exp_decay,
             "epsilon_exp_factor": self.epsilon_exp_factor,
+            "epsilon_decay_unit": self.epsilon_decay_unit,
+            "epsilon_linear_steps": self.epsilon_linear_steps,
             "epsilon_linear_episodes": self.epsilon_linear_episodes,
+            "environment_steps": self.environment_steps,
             # 已完成的神经网络更新次数，用于恢复目标网络同步节奏。
             "learn_steps": self.learn_steps,
             # n-step 只改变训练目标，不改变网络结构；旧 checkpoint 缺失时按 1 处理。
@@ -507,7 +540,14 @@ class DQNAgent:
         self.epsilon_end = float(checkpoint["epsilon_end"])
         self.epsilon_exp_decay = bool(checkpoint["epsilon_exp_decay"])
         self.epsilon_exp_factor = float(checkpoint["epsilon_exp_factor"])
+        # 新字段缺失表示这是按 episode 衰减的历史 checkpoint。
+        checkpoint_decay_unit = str(checkpoint.get("epsilon_decay_unit", "episode"))
+        if checkpoint_decay_unit not in ("step", "episode"):
+            raise ValueError(f"Unsupported checkpoint epsilon_decay_unit={checkpoint_decay_unit!r}")
+        self.epsilon_decay_unit = cast(EpsilonDecayUnit, checkpoint_decay_unit)
+        self.epsilon_linear_steps = int(checkpoint.get("epsilon_linear_steps", 300_000))
         self.epsilon_linear_episodes = int(checkpoint["epsilon_linear_episodes"])
+        self.environment_steps = int(checkpoint.get("environment_steps", 0))
         self.learn_steps = int(checkpoint["learn_steps"])
         self.n_step = int(checkpoint.get("n_step", 1))
         self.gamma = float(checkpoint.get("gamma", self.gamma))

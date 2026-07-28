@@ -98,6 +98,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--epsilon-exp-factor", type=float, default=TrainConfig.epsilon_exp_factor, metavar="FACTOR"
     )
+    parser.add_argument(
+        "--epsilon-decay-unit",
+        choices=("step", "episode"),
+        default=TrainConfig.epsilon_decay_unit,
+        help="linear epsilon decay unit (default: step; exponential decay always uses episode)",
+    )
+    parser.add_argument(
+        "--epsilon-linear-steps",
+        type=int,
+        default=TrainConfig.epsilon_linear_steps,
+        metavar="N",
+        help="environment steps used to linearly decay epsilon to its floor",
+    )
     # epsilon 线性降至下限所用局数；当前默认固定为 15000。
     parser.add_argument(
         "--epsilon-linear-episodes",
@@ -220,6 +233,8 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("epsilon values must satisfy 0 <= end <= start <= 1")
     if not 0.0 < args.epsilon_exp_factor <= 1.0:
         raise ValueError("epsilon_exp_factor must be in (0, 1]")
+    if args.epsilon_linear_steps < 1:
+        raise ValueError("epsilon_linear_steps must be positive")
     if args.epsilon_linear_episodes is not None and args.epsilon_linear_episodes < 1:
         raise ValueError("epsilon_linear_episodes must be positive")
     epsilon_linear_episodes = (
@@ -287,6 +302,8 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         epsilon_end=args.epsilon_end,
         epsilon_exp_decay=args.epsilon_exp_decay,
         epsilon_exp_factor=args.epsilon_exp_factor,
+        epsilon_decay_unit=("episode" if args.epsilon_exp_decay else args.epsilon_decay_unit),
+        epsilon_linear_steps=args.epsilon_linear_steps,
         epsilon_linear_episodes=epsilon_linear_episodes,
         target_update_interval=args.target_update_interval,
         hidden_size=args.hidden_size,
@@ -335,11 +352,16 @@ def print_stop_overview(
 ) -> None:
     early_stop_enabled = args.early_stop
     if args.algorithm == "dqn":
-        selection_start_text = (
-            "epsilon floor (dynamic)"
-            if train_config.epsilon_exp_decay
-            else f"epsilon floor ({train_config.epsilon_linear_episodes})"
-        )
+        if train_config.epsilon_exp_decay:
+            selection_start_text = "epsilon floor (dynamic episode-exponential schedule)"
+        elif train_config.epsilon_decay_unit == "step":
+            selection_start_text = (
+                f"epsilon floor ({train_config.epsilon_linear_steps} environment steps)"
+            )
+        else:
+            selection_start_text = (
+                f"epsilon floor ({train_config.epsilon_linear_episodes} episodes)"
+            )
     else:
         selection_start_text = f"episode {args.min_episodes}"
 
@@ -542,6 +564,8 @@ def main() -> None:
             epsilon_end=train_config.epsilon_end,
             epsilon_exp_decay=train_config.epsilon_exp_decay,
             epsilon_exp_factor=train_config.epsilon_exp_factor,
+            epsilon_decay_unit=train_config.epsilon_decay_unit,
+            epsilon_linear_steps=train_config.epsilon_linear_steps,
             epsilon_linear_episodes=train_config.epsilon_linear_episodes,
             target_update_interval=train_config.target_update_interval,
         )
@@ -580,6 +604,8 @@ def main() -> None:
             "epsilon_end",
             "epsilon_exp_decay",
             "epsilon_exp_factor",
+            "epsilon_decay_unit",
+            "epsilon_linear_steps",
             "epsilon_linear_episodes",
             "target_update_interval",
         ):
@@ -621,7 +647,19 @@ def main() -> None:
             "selection_start_episode": (
                 args.min_episodes
                 if args.algorithm == "ppo"
-                else train_config.epsilon_linear_episodes
+                else (
+                    train_config.epsilon_linear_episodes
+                    if not train_config.epsilon_exp_decay
+                    and train_config.epsilon_decay_unit == "episode"
+                    else None
+                )
+            ),
+            "selection_start_environment_steps": (
+                train_config.epsilon_linear_steps
+                if args.algorithm == "dqn"
+                and not train_config.epsilon_exp_decay
+                and train_config.epsilon_decay_unit == "step"
+                else None
             ),
         },
         "deterministic": args.deterministic,
@@ -662,7 +700,7 @@ def main() -> None:
     # 每局结束时的 mean_loss_100 历史，用于生成 train/report。
     mean_loss_100s: list[float] = []
     algorithm_metric_histories: dict[str, list[float]] = (
-        {"epsilon": [], "replay_buffer_size": []}
+        {"epsilon": [], "environment_steps": [], "replay_buffer_size": []}
         if args.algorithm == "dqn"
         else {
             "policy_loss": [],
@@ -706,6 +744,7 @@ def main() -> None:
         if args.algorithm == "dqn":
             algorithm_metrics_header = [
                 "epsilon",
+                "environment_steps",
                 "loss",
                 "mean_loss_100",
                 "replay_buffer_size",
@@ -896,6 +935,8 @@ def main() -> None:
                     )
                     # 环境反馈，info是环境额外返回的信息字典，不直接参与DQN更新
                     next_state, reward, done, info = env.step(action)
+                    if args.algorithm == "dqn":
+                        agent.advance_environment_step()
                     # 累加本局每一步的环境奖励，形成单局累计 reward。
                     episode_reward += reward
                     for component in reward_components:
@@ -915,8 +956,10 @@ def main() -> None:
                 # 则按实际跨度 k 保存尾部，并允许从最后的非终止状态 bootstrap。
                 agent.finish_episode()
 
-                # 每个 episode 执行一次 epsilon 衰减；默认按最大训练局数的 50% 线性退火。
-                if args.algorithm == "dqn":
+                # 指数衰减和 episode 线性衰减在每局结束时更新；step 模式已在环境步后更新。
+                if args.algorithm == "dqn" and (
+                    agent.epsilon_exp_decay or agent.epsilon_decay_unit == "episode"
+                ):
                     agent.decay_epsilon(episode)
                 # 从环境返回的额外信息info中提取游戏分数字段的值
                 score = int(info["score"])
@@ -954,6 +997,9 @@ def main() -> None:
                     mean_loss_100s.append(mean_loss_100)
                 if args.algorithm == "dqn":
                     algorithm_metric_histories["epsilon"].append(agent.epsilon)
+                    algorithm_metric_histories["environment_steps"].append(
+                        float(agent.environment_steps)
+                    )
                     algorithm_metric_histories["replay_buffer_size"].append(
                         float(len(agent.replay_buffer))
                     )
@@ -1030,6 +1076,11 @@ def main() -> None:
                     if args.algorithm == "dqn":
                         writer.add_scalar("train/epsilon", agent.epsilon, episode)
                         writer.add_scalar(
+                            "train/environment_steps",
+                            agent.environment_steps,
+                            episode,
+                        )
+                        writer.add_scalar(
                             "train/replay_buffer_size", len(agent.replay_buffer), episode
                         )
                     else:
@@ -1074,6 +1125,7 @@ def main() -> None:
                 if args.algorithm == "dqn":
                     algorithm_metrics_row = [
                         f"{agent.epsilon:.6f}",
+                        agent.environment_steps,
                         mean_loss,
                         f"{mean_loss_100:.4f}",
                         len(agent.replay_buffer),
@@ -1162,7 +1214,8 @@ def main() -> None:
 
                 # 每个episode输出一次指标信息
                 algorithm_status = (
-                    f"epsilon={agent.epsilon:.3f} replay={len(agent.replay_buffer)}"
+                    f"epsilon={agent.epsilon:.3f} env_steps={agent.environment_steps} "
+                    f"replay={len(agent.replay_buffer)}"
                     if args.algorithm == "dqn"
                     else (
                         f"updates={agent.update_steps} rollout={len(agent.rollout)} "

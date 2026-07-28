@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
@@ -164,6 +165,10 @@ class TrainConfig:
     epsilon_exp_decay: bool = False
     # 指数衰减模式下，每局结束后 epsilon 乘以的系数。
     epsilon_exp_factor: float = 0.995
+    # 线性衰减的计数单位；默认按环境 step 衰减。
+    epsilon_decay_unit: Literal["step", "episode"] = "step"
+    # 按环境 step 线性衰减到 epsilon_end 所用步数。
+    epsilon_linear_steps: int = 300_000
     # 线性衰减到 epsilon_end 所用局数。
     epsilon_linear_episodes: int | None = 15_000
     target_update_interval: int = 1000

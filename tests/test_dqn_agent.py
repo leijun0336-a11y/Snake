@@ -62,17 +62,34 @@ def test_grid_agent_outputs_action() -> None:
 
 
 def test_epsilon_decay_strategies_are_explicit() -> None:
-    linear_agent = DQNAgent(
+    step_agent = DQNAgent(
         state_size=20,
         action_size=3,
         epsilon_start=1.0,
         epsilon_end=0.0,
-        epsilon_exp_decay=False,
+        epsilon_linear_steps=10,
+        seed=1,
+    )
+    for _ in range(5):
+        step_agent.advance_environment_step()
+    assert step_agent.environment_steps == 5
+    assert step_agent.epsilon == pytest.approx(0.5)
+    for _ in range(6):
+        step_agent.advance_environment_step()
+    assert step_agent.environment_steps == 11
+    assert step_agent.epsilon == pytest.approx(0.0)
+
+    episode_agent = DQNAgent(
+        state_size=20,
+        action_size=3,
+        epsilon_start=1.0,
+        epsilon_end=0.0,
+        epsilon_decay_unit="episode",
         epsilon_linear_episodes=10,
         seed=1,
     )
-    linear_agent.decay_epsilon(5)
-    assert linear_agent.epsilon == pytest.approx(0.5)
+    episode_agent.decay_epsilon(5)
+    assert episode_agent.epsilon == pytest.approx(0.5)
 
     exp_agent = DQNAgent(
         state_size=20,
@@ -81,10 +98,12 @@ def test_epsilon_decay_strategies_are_explicit() -> None:
         epsilon_end=0.0,
         epsilon_exp_decay=True,
         epsilon_exp_factor=0.8,
+        epsilon_decay_unit="step",
         seed=1,
     )
     exp_agent.decay_epsilon()
     assert exp_agent.epsilon == pytest.approx(0.8)
+    assert exp_agent.epsilon_decay_unit == "episode"
 
 
 def test_grid_agent_crops_local_features_at_board_edge() -> None:
@@ -280,9 +299,11 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
         use_local_crop=False,
         epsilon_exp_decay=True,
         epsilon_exp_factor=0.8,
+        epsilon_linear_steps=456,
         epsilon_linear_episodes=123,
         seed=1,
     )
+    trained_agent.advance_environment_step()
     trained_agent.save(checkpoint_path)
 
     loaded_agent = DQNAgent(
@@ -301,7 +322,10 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     assert loaded_agent.use_local_crop is False
     assert loaded_agent.epsilon_exp_decay is True
     assert loaded_agent.epsilon_exp_factor == 0.8
+    assert loaded_agent.epsilon_decay_unit == "episode"
+    assert loaded_agent.epsilon_linear_steps == 456
     assert loaded_agent.epsilon_linear_episodes == 123
+    assert loaded_agent.environment_steps == 1
 
 
 def test_save_embeds_resolved_run_config(tmp_path) -> None:
@@ -339,6 +363,29 @@ def test_checkpoint_restores_n_step_training_semantics(tmp_path) -> None:
     assert loaded_agent.gamma == pytest.approx(0.95)
     assert loaded_agent.n_step_accumulator.n_step == 4
     assert loaded_agent.n_step_accumulator.gamma == pytest.approx(0.95)
+
+
+def test_legacy_checkpoint_defaults_to_episode_epsilon_decay(tmp_path) -> None:
+    checkpoint_path = tmp_path / "legacy_epsilon.pt"
+    source_agent = DQNAgent(
+        state_size=20,
+        action_size=3,
+        epsilon_decay_unit="episode",
+        seed=1,
+    )
+    source_agent.save(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint.pop("epsilon_decay_unit")
+    checkpoint.pop("epsilon_linear_steps")
+    checkpoint.pop("environment_steps")
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded_agent = DQNAgent(state_size=20, action_size=3, seed=2)
+    loaded_agent.load(checkpoint_path)
+
+    assert loaded_agent.epsilon_decay_unit == "episode"
+    assert loaded_agent.epsilon_linear_steps == 300_000
+    assert loaded_agent.environment_steps == 0
 
 
 def test_legacy_dqn_checkpoint_without_crop_metadata_uses_historical_5x5(tmp_path) -> None:

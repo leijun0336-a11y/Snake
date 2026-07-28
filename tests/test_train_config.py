@@ -17,6 +17,10 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert train_config.max_steps_per_episode is None
     assert train_config.episodes == 40_000
+    assert train_config.epsilon_start == pytest.approx(1.0)
+    assert train_config.epsilon_end == pytest.approx(0.01)
+    assert train_config.epsilon_decay_unit == "step"
+    assert train_config.epsilon_linear_steps == 300_000
     assert train_config.epsilon_linear_episodes == 15_000
     assert env_config.width == 6
     assert env_config.height == 6
@@ -41,6 +45,43 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.use_local_crop is True
     assert train_config.use_local_crop is True
     assert TRAINING_START_DELAY_SECONDS == 5
+
+
+def test_epsilon_decay_can_use_episode_unit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train.py",
+            "--epsilon-decay-unit",
+            "episode",
+            "--epsilon-linear-episodes",
+            "12000",
+        ],
+    )
+
+    train_config, _ = build_configs(parse_args())
+
+    assert train_config.epsilon_decay_unit == "episode"
+    assert train_config.epsilon_linear_episodes == 12_000
+
+
+def test_exponential_epsilon_decay_resolves_to_episode_unit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--epsilon-exp-decay"])
+
+    train_config, _ = build_configs(parse_args())
+
+    assert train_config.epsilon_exp_decay is True
+    assert train_config.epsilon_decay_unit == "episode"
+
+
+def test_epsilon_linear_steps_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--epsilon-linear-steps", "0"])
+
+    with pytest.raises(ValueError, match="epsilon_linear_steps must be positive"):
+        build_configs(parse_args())
 
 
 def test_ppo_config_uses_aligned_defaults(monkeypatch: pytest.MonkeyPatch) -> None:

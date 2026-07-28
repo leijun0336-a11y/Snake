@@ -31,7 +31,7 @@ uv run --extra cpu snake-play
 | TD target 步数 `n-step` | `1` |
 | Learning rate | `0.0001` |
 | 经验回放 | proportional PER（可用 `--no-PER` 切换为均匀回放） |
-| Epsilon | 从 `1.0` 线性降至 `0.01`，在 `15000` 局内完成衰减 |
+| Epsilon | 从 `1.0` 线性降至 `0.01`，默认按环境 step 衰减，`300000` step 到达下限 |
 | 隐藏层宽度 | `256` |
 | CNN 主干/投影通道 | `32 / 8` |
 | 残差块 dilation | `1, 1, 2` |
@@ -179,6 +179,28 @@ uv run --extra cu124 python -m snake_ai.train \
 ```bash
 uv run --extra cu124 python -m snake_ai.train --n-step 3
 ```
+
+DQN 默认按环境交互步数对 epsilon 做线性衰减：
+
+```text
+epsilon_start        = 1.0
+epsilon_end          = 0.01
+epsilon_decay_unit   = step
+epsilon_linear_steps = 300000
+```
+
+可以覆盖衰减步数，或切回历史实验使用的 15000-episode 线性衰减：
+
+```bash
+uv run --extra cu124 python -m snake_ai.train --epsilon-linear-steps 250000
+
+uv run --extra cu124 python -m snake_ai.train \
+  --epsilon-decay-unit episode \
+  --epsilon-linear-episodes 15000
+```
+
+`--epsilon-exp-decay` 继续保留；启用后固定按 episode 乘以
+`--epsilon-exp-factor`，不使用线性衰减单位。
 
 DQN 默认使用 proportional PER；新经验以当前最大优先级写入，采样使用 Sum Tree，Huber loss 使用 importance-sampling 权重，并根据 Double DQN TD error 更新优先级。默认参数为 `alpha=0.6`、`beta=0.4` 线性退火至 `1.0`（100,000 次学习更新）、`epsilon=1e-6`。如需均匀经验回放，可传入：
 
@@ -364,7 +386,7 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 - Double DQN 使用 `policy_net` 选择下一动作，再用 `target_net` 评估该动作。
 - 损失函数为 Huber loss（`SmoothL1Loss`），梯度范数裁剪到 `10.0`。
 - 每隔 `target_update_interval` 次学习更新，把 `policy_net` 参数复制到 `target_net`。
-- Epsilon 默认线性衰减；传入 `--epsilon-exp-decay` 后改为每局乘以 `--epsilon-exp-factor`。
+- Epsilon 默认在 300000 个环境 step 内线性衰减；可通过 `--epsilon-decay-unit episode` 切回按局线性衰减。传入 `--epsilon-exp-decay` 后改为每局乘以 `--epsilon-exp-factor`。
 
 ### PPO 学习流程
 
@@ -482,7 +504,7 @@ DQN checkpoint 使用 `architecture_version=3`，PPO checkpoint 使用独立的 
 
 - 得分、近 100 局平均分、吃食效率和 episode 步数；
 - episode 总奖励及 food/progress/step/hunger/terminal 奖励分量；
-- DQN 记录 epsilon、Huber loss、近 100 局平均 loss和 replay buffer 大小；
+- DQN 记录 epsilon、累计环境 step、Huber loss、近 100 局平均 loss 和 replay buffer 大小；
 - PPO 记录总损失、policy/value loss、entropy、approx KL、clip fraction 和 explained variance；
 - quick/confirmation 验证均分、满盘率、超时率及 best 晋升结果。
 
