@@ -21,7 +21,7 @@ uv run --extra cpu snake-play
 | 棋盘 | `6 × 6` |
 | 状态模式 | `hybrid` |
 | 奖励配置 | `experiment8` |
-| 势函数进度奖励 | 开启，可用 `--no-potential-reward` 关闭 |
+| 势函数进度奖励 | 严格 PBRS，开启；可用 `--no-potential-reward` 关闭 |
 | 步成本与饥饿成本 | 开启，可用 `--no-cost-rewards` 关闭 |
 | 算法 | `dqn`（Double / Dueling DQN） |
 | 最大训练局数 | `40000` |
@@ -422,6 +422,10 @@ hunger_reward = -0.02 × hunger_ratio²
 ```
 
 例如 `6×6` 棋盘的 `starvation_limit=36`；连续第 36 步未进食时饥饿成本为 `-0.02`，第 37 步仍封顶为 `-0.02` 并触发饿死，再叠加步成本和 `-12` 饿死惩罚。吃到食物会把 `steps_since_food` 清零。
+
+势函数进度奖励严格使用 `beta × (gamma × Φ(s') - Φ(s))`。`Φ` 是蛇头到当前食物的归一化
+曼哈顿距离势函数；吃到食物后，`s'` 使用新生成的食物，碰撞、饿死和占满棋盘等终止状态统一令
+`Φ(s') = 0`。因此终止动作也会产生用于抵消累计 shaping 的 potential correction。
 
 `RewardConfig` 中 `reference.potential_reward=False`，`experiment8.potential_reward=True`；但训练 CLI 当前默认显式开启势函数奖励，因此切换到 `reference` 后若要采用它原本的势函数开关，还需传入：
 

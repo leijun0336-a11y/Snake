@@ -187,6 +187,7 @@ class SnakeEnv:
         self.frame_iteration += 1
         old_head = self.snake[0]
         old_food = self.food
+        old_phi = self._food_potential(old_head, old_food) if self.potential_reward else None
         new_head = self._move(action)
         self.last_reward_components = self._empty_reward_components()
         self.termination_reason = "none"
@@ -195,10 +196,11 @@ class SnakeEnv:
         if self._is_collision_after_move(new_head):
             self.last_reward_components["terminal"] = self.collision_penalty
             self.termination_reason = self._collision_reason(new_head)
+            self._apply_potential_shaping(old_phi, terminal=True)
             reward = self._total_reward()
             return self._get_observation(), reward, True, self._get_info()
 
-        # 合法移动先更新蛇身，再根据同一颗 old_food 计算进度奖励。
+        # 合法移动先完成整个状态转移，再基于最终的下一状态计算 PBRS。
         self.snake.insert(0, new_head)
         ate_food = new_head == old_food
         if ate_food:
@@ -208,13 +210,6 @@ class SnakeEnv:
         else:
             self.snake.pop()
             self.steps_since_food += 1
-
-        if self.potential_reward:
-            old_phi = self._food_potential(old_head, old_food)
-            new_phi = self._food_potential(new_head, old_food)
-            self.last_reward_components["progress"] = self.progress_beta * (
-                self.reward_gamma * new_phi - old_phi
-            )
 
         # experiment8 对所有合法移动收 step cost；reference 只对普通移动收取。
         applies_step_cost = self.step_cost_scope == "all_legal_moves" or not ate_food
@@ -243,6 +238,7 @@ class SnakeEnv:
             self.termination_reason = "starvation"
             done = True
 
+        self._apply_potential_shaping(old_phi, terminal=done)
         reward = self._total_reward()
 
         # 渲染
@@ -475,6 +471,16 @@ class SnakeEnv:
         max_distance = max((self.width - 1) + (self.height - 1), 1)
         distance = abs(food.x - head.x) + abs(food.y - head.y)
         return 1.0 - distance / max_distance
+
+    def _apply_potential_shaping(self, old_phi: float | None, *, terminal: bool) -> None:
+        """应用 beta * (gamma * Phi(s') - Phi(s))；终止状态的势函数固定为零。"""
+
+        if old_phi is None:
+            return
+        new_phi = 0.0 if terminal else self._food_potential(self.snake[0], self.food)
+        self.last_reward_components["progress"] = self.progress_beta * (
+            self.reward_gamma * new_phi - old_phi
+        )
 
     def _collision_reason(self, point: Point) -> str:
         if point.x < 0 or point.x >= self.width or point.y < 0 or point.y >= self.height:

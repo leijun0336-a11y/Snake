@@ -44,7 +44,7 @@ def test_experiment8_profile_uses_current_frozen_values() -> None:
     assert config.terminal_cost_mode == "accumulate"
     assert config.starvation_limit_mode == "board_area"
     assert config.starvation_comparison == "gt"
-    assert config.progress_mode == "legacy_food_target"
+    assert config.progress_mode == "pbrs_food_distance"
     assert config.historical_source_revision == ("62ff05d5a8d7b65472a984e56647f2c20bceb915")
 
 
@@ -65,32 +65,37 @@ def test_experiment8_eating_step_matches_current_components() -> None:
     env.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
     env.direction = Direction.RIGHT
     env.food = Point(3, 2)
+    old_phi = env._food_potential(env.snake[0], env.food)
 
     _, reward, done, info = env.step(0)
+    new_phi = env._food_potential(env.snake[0], env.food)
+    expected_progress = env.progress_beta * (env.reward_gamma * new_phi - old_phi)
 
     assert done is False
     assert info["reward_food"] == 10.0
-    assert info["reward_progress"] == pytest.approx(0.09)
+    assert info["reward_progress"] == pytest.approx(expected_progress)
     assert info["reward_step"] == -0.005
     assert info["reward_hunger"] == 0.0
     assert info["reward_terminal"] == 0.0
-    assert reward == pytest.approx(10.085)
+    assert reward == pytest.approx(10.0 + expected_progress - 0.005)
 
 
-def test_experiment8_collision_has_no_other_reward_components() -> None:
+def test_experiment8_collision_applies_terminal_potential_correction() -> None:
     env = SnakeEnv(width=6, height=6, seed=1, reward_profile="experiment8")
     env.snake = [Point(5, 3), Point(4, 3), Point(3, 3)]
     env.direction = Direction.RIGHT
+    old_phi = env._food_potential(env.snake[0], env.food)
 
     _, reward, done, info = env.step(0)
+    expected_progress = -env.progress_beta * old_phi
 
     assert done is True
-    assert reward == -100.0
+    assert reward == pytest.approx(-100.0 + expected_progress)
     assert info["termination_reason"] == "collision_wall"
     assert info["reward_terminal"] == -100.0
+    assert info["reward_progress"] == pytest.approx(expected_progress)
     assert all(
-        float(info[f"reward_{component}"]) == 0.0
-        for component in ("food", "progress", "step", "hunger")
+        float(info[f"reward_{component}"]) == 0.0 for component in ("food", "step", "hunger")
     )
 
 
@@ -102,18 +107,20 @@ def test_experiment8_starvation_occurs_after_limit_and_accumulates_costs() -> No
     env.steps_since_food = 35
 
     _, _, done_at_36, _ = env.step(0)
+    old_phi = env._food_potential(env.snake[0], env.food)
     _, reward_at_37, done_at_37, info = env.step(0)
+    expected_progress = -env.progress_beta * old_phi
 
     assert env.starvation_limit == 36
     assert done_at_36 is False
     assert done_at_37 is True
     assert info["steps_since_food"] == 37
     assert info["termination_reason"] == "starvation"
-    assert info["reward_progress"] == pytest.approx(0.094)
+    assert info["reward_progress"] == pytest.approx(expected_progress)
     assert info["reward_step"] == -0.005
     assert info["reward_hunger"] == -0.02
     assert info["reward_terminal"] == -12.0
-    assert reward_at_37 == pytest.approx(-11.931)
+    assert reward_at_37 == pytest.approx(-12.025 + expected_progress)
 
 
 def test_experiment8_starvation_limit_does_not_change_with_snake_length() -> None:
@@ -137,18 +144,20 @@ def test_experiment8_board_completion_matches_current_total() -> None:
     ]
     env.direction = Direction.RIGHT
     env.food = food
+    old_phi = env._food_potential(env.snake[0], env.food)
 
     _, reward, done, info = env.step(0)
+    expected_progress = -env.progress_beta * old_phi
 
     assert done is True
     assert len(env.snake) == 36
     assert info["termination_reason"] == "board_completed"
     assert info["reward_food"] == 10.0
-    assert info["reward_progress"] == pytest.approx(0.09)
+    assert info["reward_progress"] == pytest.approx(expected_progress)
     assert info["reward_step"] == -0.005
     assert info["reward_hunger"] == 0.0
     assert info["reward_terminal"] == 20.0
-    assert reward == pytest.approx(30.085)
+    assert reward == pytest.approx(29.995 + expected_progress)
 
 
 def test_profile_step_limit_resolution_is_explicit() -> None:
@@ -184,7 +193,7 @@ def test_profile_step_limit_resolution_is_explicit() -> None:
     )
 
 
-def test_experiment_ppo_environment_emits_food_four_and_collision_minus_four() -> None:
+def test_experiment_ppo_environment_keeps_base_food_and_collision_rewards() -> None:
     eating = SnakeEnv(width=6, height=6, seed=1, reward_profile="experiment_ppo")
     eating.snake = [Point(2, 2), Point(1, 2), Point(0, 2)]
     eating.direction = Direction.RIGHT
@@ -199,10 +208,13 @@ def test_experiment_ppo_environment_emits_food_four_and_collision_minus_four() -
     collision = SnakeEnv(width=6, height=6, seed=1, reward_profile="experiment_ppo")
     collision.snake = [Point(5, 3), Point(4, 3), Point(3, 3)]
     collision.direction = Direction.RIGHT
+    old_phi = collision._food_potential(collision.snake[0], collision.food)
 
     _, reward, done, info = collision.step(0)
+    expected_progress = -collision.progress_beta * old_phi
 
     assert done is True
-    assert reward == pytest.approx(-4.0)
+    assert reward == pytest.approx(-4.0 + expected_progress)
+    assert info["reward_progress"] == pytest.approx(expected_progress)
     assert info["reward_terminal"] == pytest.approx(-4.0)
     collision.close()

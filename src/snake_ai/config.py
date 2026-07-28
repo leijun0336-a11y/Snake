@@ -9,7 +9,7 @@ RUNS_DIR = PROJECT_ROOT / "runs"
 
 @dataclass(frozen=True)
 class RewardConfig:
-    """一组完整的奖励语义配置，用于复现不同训练实验的奖励行为。"""
+    """一组奖励尺度和边界配置；势函数奖励统一采用当前严格 PBRS 语义。"""
 
     # 奖励配置名称，也是命令行选择 reward profile 时使用的标识。
     name: str
@@ -43,8 +43,8 @@ class RewardConfig:
     starvation_limit_mode: str
     # 触发饿死的边界比较：gt 表示大于上限，gte 表示大于或等于上限。
     starvation_comparison: str
-    # 进度奖励语义版本；legacy_food_target 表示本步始终以移动前的食物为目标计算。
-    progress_mode: str = "legacy_food_target"
+    # 进度奖励语义版本；下一状态使用其实际食物，终止状态的势函数固定为零。
+    progress_mode: str = "pbrs_food_distance"
     # 历史配置所依据的源码git提交；当前配置或无特定来源时为 None。
     historical_source_revision: str | None = None
 
@@ -68,8 +68,8 @@ REFERENCE_REWARD_CONFIG = RewardConfig(
 )
 
 
-# 第八次实验 dqn_20260712_130642 的奖励配置(目前最优)。
-# 源码证据对应后来提交为 62ff05d 的工作树；不能把这些历史边界"修正"为当前语义。
+# 第八次实验 dqn_20260712_130642 的奖励尺度和边界配置（目前最优）。
+# 源码证据对应后来提交为 62ff05d 的工作树；PBRS 计算统一采用当前实现。
 EXPERIMENT8_REWARD_CONFIG = RewardConfig(
     name="experiment8",
     potential_reward=True,
@@ -113,7 +113,7 @@ EXPERIMENT_PPO_REWARD_CONFIG = RewardConfig(
     terminal_cost_mode="accumulate",
     starvation_limit_mode="2x_board_area_plus_snake_length",
     starvation_comparison="gte",
-    progress_mode="legacy_food_target",
+    progress_mode="pbrs_food_distance",
 )
 
 # 把所有奖励配置整理成一个"按名称查找配置"的字典，并生成所有可用配置名称。
