@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from snake_ai.agents import DQNAgent, PPOAgent
-from snake_ai.agents.ppo_agent import PPOMetrics
+from snake_ai.agents.ppo_agent import PPOActionSample, PPOMetrics
 from snake_ai.config import (
     CHECKPOINT_DIR,
     REWARD_PROFILE_NAMES,
@@ -888,7 +888,12 @@ def main() -> None:
                     or env.frame_iteration < train_config.max_steps_per_episode
                 ):
                     # 训练时的动作采样
-                    action = agent.act(state, training=True)
+                    action_sample = agent.act(state, training=True)
+                    action = (
+                        action_sample.action
+                        if isinstance(action_sample, PPOActionSample)
+                        else action_sample
+                    )
                     # 环境反馈，info是环境额外返回的信息字典，不直接参与DQN更新
                     next_state, reward, done, info = env.step(action)
                     # 累加本局每一步的环境奖励，形成单局累计 reward。
@@ -896,7 +901,7 @@ def main() -> None:
                     for component in reward_components:
                         reward_components[component] += float(info[f"reward_{component}"])
                     # 加入经验回放池
-                    agent.remember(state, action, reward, next_state, done)
+                    agent.remember(state, action_sample, reward, next_state, done)
                     # 智能体更新Q值，如果经验回放池没达到batch_size则返回None
                     update_result = agent.learn()
                     if isinstance(update_result, PPOMetrics):

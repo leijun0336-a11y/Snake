@@ -65,6 +65,15 @@ class RolloutTransition:
 
 
 @dataclass(frozen=True)
+class PPOActionSample:
+    """训练态策略采样结果，供环境执行动作并由 rollout 直接复用。"""
+
+    action: int
+    log_prob: float
+    value: float
+
+
+@dataclass(frozen=True)
 class PPOMetrics:
     loss: float
     policy_loss: float
@@ -190,12 +199,18 @@ class PPOAgent:
             use_local_crop=self.use_local_crop,
         ).to(self.device)
 
-    # 训练时按策略分布采样；评估时选择最大 logit，可选循环状态的备选动作回退。
-    def act(self, state: Any, training: bool = True) -> int:
+    # 训练时返回动作及其 log-prob/value；评估时只返回动作整数。
+    def act(self, state: Any, training: bool = True) -> int | PPOActionSample:
         with torch.no_grad():
-            logits, _ = self.policy_net(self._state_batch_to_tensor([state]))
+            logits, value = self.policy_net(self._state_batch_to_tensor([state]))
             if training:
-                return int(Categorical(logits=logits).sample().item())
+                distribution = Categorical(logits=logits)
+                action = distribution.sample()
+                return PPOActionSample(
+                    action=int(action.item()),
+                    log_prob=float(distribution.log_prob(action).item()),
+                    value=float(value.item()),
+                )
             if not self.argmax_cycle_fallback or self.action_size < 2:
                 return int(logits.argmax(dim=1).item())
             ranked_actions = logits.argsort(dim=1, descending=True)[0]
@@ -234,36 +249,48 @@ class PPOAgent:
         parts = state if self.state_mode == "hybrid" else (state,)
         return b"".join(np.ascontiguousarray(part, dtype=np.float32).tobytes() for part in parts)
 
-    # 计算当前策略下的 log-prob/value，并写入 rollout buffer。
+    # 复用 act() 的采样信息并写入 rollout；普通整数 action 保留兼容回退路径。
     def remember(
         self,
         state: Any,
-        action: int,
+        action: int | PPOActionSample,
         reward: float,
         next_state: Any,
         done: bool,
     ) -> None:
-        # 当前接口的 act() 只返回动作，因此这里重新计算训练更新所需的 log-prob 和 value。
         with torch.no_grad():
-            logits, value = self.policy_net(self._state_batch_to_tensor([state]))
-            distribution = Categorical(logits=logits)
-            action_tensor = torch.tensor([action], dtype=torch.long, device=self.device)
-            log_prob = distribution.log_prob(action_tensor)
-            if done:
-                next_value = torch.zeros(1, device=self.device)
+            if isinstance(action, PPOActionSample):
+                action_value = action.action
+                log_prob = action.log_prob
+                value = action.value
             else:
-                _, next_value = self.policy_net(self._state_batch_to_tensor([next_state]))
+                # 兼容直接传入整数动作的旧调用方式。
+                action_value = int(action)
+                logits, current_value = self.policy_net(self._state_batch_to_tensor([state]))
+                distribution = Categorical(logits=logits)
+                action_tensor = torch.tensor(
+                    [action_value],
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                log_prob = float(distribution.log_prob(action_tensor).item())
+                value = float(current_value.item())
+            if done:
+                next_value = 0.0
+            else:
+                _, next_value_tensor = self.policy_net(self._state_batch_to_tensor([next_state]))
+                next_value = float(next_value_tensor.item())
 
         self.rollout.append(
             RolloutTransition(
                 state=self._copy_state(state),
-                action=int(action),
+                action=action_value,
                 reward=float(reward),
                 done=bool(done),
                 episode_end=bool(done),
-                log_prob=float(log_prob.item()),
-                value=float(value.item()),
-                next_value=float(next_value.item()),
+                log_prob=log_prob,
+                value=value,
+                next_value=next_value,
             )
         )
 

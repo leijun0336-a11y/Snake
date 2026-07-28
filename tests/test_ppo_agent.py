@@ -5,7 +5,12 @@ import pytest
 import torch
 
 from snake_ai.agents.dqn_agent import DQNAgent
-from snake_ai.agents.ppo_agent import PPOAgent, PPOMetrics, RolloutTransition
+from snake_ai.agents.ppo_agent import (
+    PPOActionSample,
+    PPOAgent,
+    PPOMetrics,
+    RolloutTransition,
+)
 from snake_ai.train import count_agent_parameters
 
 
@@ -117,6 +122,71 @@ def test_ppo_update_consumes_rollout_and_changes_parameters() -> None:
         not torch.equal(old, new)
         for old, new in zip(before, agent.policy_net.parameters(), strict=True)
     )
+
+
+def test_training_action_sample_reuses_log_prob_and_value_in_remember() -> None:
+    class CountingPolicy(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.forward_calls = 0
+
+        def forward(self, state: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            self.forward_calls += 1
+            batch_size = state.shape[0]
+            logits = torch.tensor([[1.0, 0.0]], device=state.device).repeat(
+                batch_size,
+                1,
+            )
+            values = torch.full((batch_size,), 2.5, device=state.device)
+            return logits, values
+
+    agent = PPOAgent(
+        state_size=2,
+        action_size=2,
+        rollout_steps=2,
+        batch_size=1,
+        seed=1,
+    )
+    policy = CountingPolicy()
+    agent.policy_net = policy
+    state = np.asarray([0.0, 1.0], dtype=np.float32)
+    next_state = np.asarray([1.0, 0.0], dtype=np.float32)
+
+    sample = agent.act(state, training=True)
+
+    assert isinstance(sample, PPOActionSample)
+    assert policy.forward_calls == 1
+
+    agent.remember(state, sample, 1.0, next_state, False)
+
+    assert policy.forward_calls == 2
+    assert len(agent.rollout) == 1
+    transition = agent.rollout[0]
+    assert transition.action == sample.action
+    assert transition.log_prob == pytest.approx(sample.log_prob)
+    assert transition.value == pytest.approx(sample.value)
+    assert transition.next_value == pytest.approx(2.5)
+
+
+def test_terminal_training_sample_needs_no_forward_in_remember() -> None:
+    agent = PPOAgent(
+        state_size=2,
+        action_size=2,
+        rollout_steps=2,
+        batch_size=1,
+        seed=1,
+    )
+    state = np.asarray([0.0, 1.0], dtype=np.float32)
+    sample = agent.act(state, training=True)
+    assert isinstance(sample, PPOActionSample)
+
+    def fail_forward(state_batch: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        raise AssertionError("terminal remember must reuse the action sample")
+
+    agent.policy_net.forward = fail_forward  # type: ignore[method-assign]
+    agent.remember(state, sample, 1.0, state, True)
+
+    assert agent.rollout[-1].next_value == 0.0
 
 
 def test_ppo_checkpoint_round_trip(tmp_path: Path) -> None:
