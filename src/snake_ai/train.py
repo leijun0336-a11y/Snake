@@ -84,6 +84,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate)
     parser.add_argument("--replay-buffer-size", type=int, default=TrainConfig.replay_buffer_size)
     parser.add_argument(
+        "--learning-starts",
+        type=int,
+        default=TrainConfig.learning_starts,
+        metavar="N",
+        help="environment steps collected before DQN gradient updates begin (default: 2000)",
+    )
+    parser.add_argument(
         "--PER",
         dest="per",
         action=argparse.BooleanOptionalAction,
@@ -223,6 +230,8 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         raise ValueError("cell_size and fps must be positive")
     if args.batch_size < 1 or args.replay_buffer_size < args.batch_size:
         raise ValueError("replay_buffer_size must be at least batch_size >= 1")
+    if args.learning_starts < 0:
+        raise ValueError("learning_starts must be non-negative")
     if not 0.0 <= args.gamma <= 1.0:
         raise ValueError("gamma must be between 0 and 1")
     if args.n_step < 1:
@@ -297,6 +306,7 @@ def build_configs(args: argparse.Namespace) -> tuple[TrainConfig, EnvConfig]:
         n_step=args.n_step,
         learning_rate=args.learning_rate,
         replay_buffer_size=args.replay_buffer_size,
+        learning_starts=args.learning_starts,
         per=per,
         epsilon_start=args.epsilon_start,
         epsilon_end=args.epsilon_end,
@@ -555,6 +565,7 @@ def main() -> None:
             **common_agent_kwargs,
             n_step=train_config.n_step,
             replay_buffer_size=train_config.replay_buffer_size,
+            learning_starts=train_config.learning_starts,
             per=train_config.per,
             per_alpha=train_config.per_alpha,
             per_beta_start=train_config.per_beta_start,
@@ -595,6 +606,7 @@ def main() -> None:
         for dqn_only_field in (
             "n_step",
             "replay_buffer_size",
+            "learning_starts",
             "per",
             "per_alpha",
             "per_beta_start",
@@ -943,7 +955,7 @@ def main() -> None:
                         reward_components[component] += float(info[f"reward_{component}"])
                     # 加入经验回放池
                     agent.remember(state, action_sample, reward, next_state, done)
-                    # 智能体更新Q值，如果经验回放池没达到batch_size则返回None
+                    # DQN 在 warm-up 或 replay 样本不足时返回 None；PPO 在 rollout 未满时返回 None。
                     update_result = agent.learn()
                     if isinstance(update_result, PPOMetrics):
                         ppo_updates.append(update_result)

@@ -39,6 +39,8 @@ class DQNAgent:
         n_step: int = 1,
         # 经验回放池容量，最多保存多少条 Transition。
         replay_buffer_size: int = 100_000,
+        # 累计到该环境步数后才允许梯度更新；经验从第一步开始写入回放池。
+        learning_starts: int = 2_000,
         # 是否使用 proportional Prioritized Experience Replay。
         per: bool = False,
         per_alpha: float = 0.6,
@@ -100,6 +102,9 @@ class DQNAgent:
         if n_step < 1:
             raise ValueError("n_step must be at least 1")
         self.n_step = n_step
+        if learning_starts < 0:
+            raise ValueError("learning_starts must be non-negative")
+        self.learning_starts = learning_starts
         if not 0.0 <= per_beta_start <= 1.0:
             raise ValueError("per_beta_start must be between 0 and 1")
         if per_beta_anneal_steps < 1:
@@ -206,6 +211,9 @@ class DQNAgent:
 
     # 更新动作函数
     def learn(self) -> float | None:  # 返回值是float或者None
+        # Warm-up 期间只收集经验，不更新网络。
+        if self.environment_steps < self.learning_starts:
+            return None
         # 如果经验回放池的样本数量还不足一个batch_size，不进行更新
         if len(self.replay_buffer) < self.batch_size:
             return None
@@ -407,6 +415,7 @@ class DQNAgent:
             "epsilon_linear_steps": self.epsilon_linear_steps,
             "epsilon_linear_episodes": self.epsilon_linear_episodes,
             "environment_steps": self.environment_steps,
+            "learning_starts": self.learning_starts,
             # 已完成的神经网络更新次数，用于恢复目标网络同步节奏。
             "learn_steps": self.learn_steps,
             # n-step 只改变训练目标，不改变网络结构；旧 checkpoint 缺失时按 1 处理。
@@ -548,6 +557,10 @@ class DQNAgent:
         self.epsilon_linear_steps = int(checkpoint.get("epsilon_linear_steps", 300_000))
         self.epsilon_linear_episodes = int(checkpoint["epsilon_linear_episodes"])
         self.environment_steps = int(checkpoint.get("environment_steps", 0))
+        # 历史 checkpoint 没有 warm-up；加载时保留其原有的立即学习语义。
+        self.learning_starts = int(checkpoint.get("learning_starts", 0))
+        if self.learning_starts < 0:
+            raise ValueError("Checkpoint learning_starts must be non-negative")
         self.learn_steps = int(checkpoint["learn_steps"])
         self.n_step = int(checkpoint.get("n_step", 1))
         self.gamma = float(checkpoint.get("gamma", self.gamma))

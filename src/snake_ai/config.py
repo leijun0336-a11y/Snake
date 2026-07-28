@@ -153,6 +153,7 @@ class TrainConfig:
     n_step: int = 1
     learning_rate: float = 1e-4
     replay_buffer_size: int = 100_000
+    learning_starts: int = 2_000
     # 默认使用 proportional PER；可通过 --no-PER 切换为均匀经验回放。
     per: bool = True
     per_alpha: float = 0.6

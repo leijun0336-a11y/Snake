@@ -31,6 +31,7 @@ uv run --extra cpu snake-play
 | TD target 步数 `n-step` | `1` |
 | Learning rate | `0.0001` |
 | 经验回放 | proportional PER（可用 `--no-PER` 切换为均匀回放） |
+| Replay warm-up | `2000` 个环境 step |
 | Epsilon | 从 `1.0` 线性降至 `0.01`，默认按环境 step 衰减，`300000` step 到达下限 |
 | 隐藏层宽度 | `256` |
 | CNN 主干/投影通道 | `32 / 8` |
@@ -380,7 +381,9 @@ GroupNorm 的组数不是硬编码值。`_group_count(channels, preferred)` 会�
 ### DQN 学习流程
 
 - `policy_net` 使用 epsilon-greedy 选择动作；评估时 `training=False`，不随机探索。
-- ReplayBuffer 满足一个 batch 后，每个环境 step 采样一批 Transition。
+- 经验从第一步开始写入 ReplayBuffer；累计达到 `--learning-starts`（默认 `2000`）且样本满足一个
+  batch 后，每个环境 step 采样一批 Transition 并更新网络。传入 `--learning-starts 0` 可关闭
+  warm-up。
 - `--n-step N` 会先聚合最多 `N` 步真实折扣奖励，再以实际跨度 `k` 使用
   `gamma**k` bootstrap；自然终止的尾部不 bootstrap，默认 `N=1`。
 - Double DQN 使用 `policy_net` 选择下一动作，再用 `target_net` 评估该动作。

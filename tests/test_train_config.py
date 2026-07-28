@@ -22,6 +22,7 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert train_config.epsilon_decay_unit == "step"
     assert train_config.epsilon_linear_steps == 300_000
     assert train_config.epsilon_linear_episodes == 15_000
+    assert train_config.learning_starts == 2_000
     assert env_config.width == 6
     assert env_config.height == 6
     args = parse_args()
@@ -37,6 +38,7 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert train_config.n_step == 1
     assert train_config.learning_rate == pytest.approx(1e-4)
     assert args.learning_rate == pytest.approx(1e-4)
+    assert args.learning_starts == 2_000
     assert args.algorithm == "dqn"
     assert args.per is None
     assert train_config.per is True
@@ -81,6 +83,13 @@ def test_epsilon_linear_steps_must_be_positive(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(sys, "argv", ["train.py", "--epsilon-linear-steps", "0"])
 
     with pytest.raises(ValueError, match="epsilon_linear_steps must be positive"):
+        build_configs(parse_args())
+
+
+def test_learning_starts_must_be_non_negative(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["train.py", "--learning-starts", "-1"])
+
+    with pytest.raises(ValueError, match="learning_starts must be non-negative"):
         build_configs(parse_args())
 
 

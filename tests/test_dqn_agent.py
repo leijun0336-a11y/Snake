@@ -21,6 +21,7 @@ def test_agent_default_learning_rate_is_one_e_minus_four() -> None:
 
     assert agent.learning_rate == pytest.approx(1e-4)
     assert agent.optimizer.param_groups[0]["lr"] == pytest.approx(1e-4)
+    assert agent.learning_starts == 2_000
     assert agent.per is False
     assert type(agent.replay_buffer) is ReplayBuffer
 
@@ -30,6 +31,7 @@ def test_per_agent_uses_prioritized_replay_and_updates() -> None:
         state_size=2,
         action_size=2,
         batch_size=2,
+        learning_starts=0,
         per=True,
         per_beta_anneal_steps=10,
         seed=1,
@@ -59,6 +61,30 @@ def test_grid_agent_outputs_action() -> None:
     action = agent.act(grid, training=False)
 
     assert action in (0, 1, 2)
+
+
+def test_learning_waits_until_replay_warmup_finishes() -> None:
+    agent = DQNAgent(
+        state_size=2,
+        action_size=2,
+        batch_size=2,
+        learning_starts=3,
+        seed=1,
+    )
+    agent.advance_environment_step()
+    agent.remember([0.0, 0.0], 0, 0.0, [1.0, 0.0], False)
+    agent.advance_environment_step()
+    agent.remember([1.0, 0.0], 1, 1.0, [0.0, 1.0], False)
+
+    assert len(agent.replay_buffer) == 2
+    assert agent.learn() is None
+    assert agent.learn_steps == 0
+
+    agent.advance_environment_step()
+    agent.remember([0.0, 1.0], 0, 0.5, [1.0, 1.0], True)
+
+    assert isinstance(agent.learn(), float)
+    assert agent.learn_steps == 1
 
 
 def test_epsilon_decay_strategies_are_explicit() -> None:
@@ -181,6 +207,7 @@ def test_cnn_agent_learns_from_numpy_replay_batch(state_mode: str) -> None:
         state_mode=state_mode,
         auxiliary_size=20,
         batch_size=2,
+        learning_starts=0,
         seed=1,
     )
     grid = np.zeros((9, 6, 6), dtype=np.float32)
@@ -299,6 +326,7 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
         use_local_crop=False,
         epsilon_exp_decay=True,
         epsilon_exp_factor=0.8,
+        learning_starts=321,
         epsilon_linear_steps=456,
         epsilon_linear_episodes=123,
         seed=1,
@@ -322,6 +350,7 @@ def test_load_restores_custom_cnn_architecture(tmp_path) -> None:
     assert loaded_agent.use_local_crop is False
     assert loaded_agent.epsilon_exp_decay is True
     assert loaded_agent.epsilon_exp_factor == 0.8
+    assert loaded_agent.learning_starts == 321
     assert loaded_agent.epsilon_decay_unit == "episode"
     assert loaded_agent.epsilon_linear_steps == 456
     assert loaded_agent.epsilon_linear_episodes == 123
@@ -378,6 +407,7 @@ def test_legacy_checkpoint_defaults_to_episode_epsilon_decay(tmp_path) -> None:
     checkpoint.pop("epsilon_decay_unit")
     checkpoint.pop("epsilon_linear_steps")
     checkpoint.pop("environment_steps")
+    checkpoint.pop("learning_starts")
     torch.save(checkpoint, checkpoint_path)
 
     loaded_agent = DQNAgent(state_size=20, action_size=3, seed=2)
@@ -386,6 +416,7 @@ def test_legacy_checkpoint_defaults_to_episode_epsilon_decay(tmp_path) -> None:
     assert loaded_agent.epsilon_decay_unit == "episode"
     assert loaded_agent.epsilon_linear_steps == 300_000
     assert loaded_agent.environment_steps == 0
+    assert loaded_agent.learning_starts == 0
 
 
 def test_legacy_dqn_checkpoint_without_crop_metadata_uses_historical_5x5(tmp_path) -> None:
