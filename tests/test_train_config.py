@@ -16,7 +16,8 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     train_config, env_config = build_configs(parse_args())
 
     assert train_config.max_steps_per_episode is None
-    assert train_config.episodes == 40_000
+    assert train_config.episodes == 50_000
+    assert train_config.gamma == pytest.approx(0.995)
     assert train_config.epsilon_start == pytest.approx(1.0)
     assert train_config.epsilon_end == pytest.approx(0.01)
     assert train_config.epsilon_decay_unit == "step"
@@ -26,7 +27,7 @@ def test_build_configs_resolves_defaults(monkeypatch: pytest.MonkeyPatch) -> Non
     assert env_config.width == 6
     assert env_config.height == 6
     args = parse_args()
-    assert args.early_stop is True
+    assert args.early_stop is False
     assert args.min_episodes == 15_000
     assert args.validation_interval == 1000
     assert args.validation_episodes == 100
@@ -108,15 +109,15 @@ def test_ppo_config_uses_aligned_defaults(monkeypatch: pytest.MonkeyPatch) -> No
     assert ppo_config.target_kl == pytest.approx(0.02)
     assert ppo_config.entropy_coefficient == pytest.approx(0.05)
     assert ppo_config.entropy_coefficient_end == pytest.approx(0.001)
-    assert train_config.episodes == 40_000
-    assert ppo_config.entropy_anneal_episodes == 15_000
+    assert train_config.episodes == 50_000
+    assert ppo_config.entropy_anneal_episodes == 50_000
     assert args.argmax_cycle_fallback is False
 
 
 @pytest.mark.parametrize(
     "extra_args, expected",
     [
-        (["--max-episodes", "40000"], 15_000),
+        (["--max-episodes", "40000"], 40_000),
         (
             ["--max-episodes", "40000", "--early-stop", "--min-episodes", "15000"],
             15_000,

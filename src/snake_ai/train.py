@@ -192,8 +192,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="use second/third-ranked actions when deterministic evaluation repeats a state",
     )
-    # 默认启用早停；可通过 --no-early-stop 跑满最大训练局数。
-    parser.add_argument("--early-stop", action=argparse.BooleanOptionalAction, default=True)
+    # 默认关闭早停；可通过 --early-stop 启用阶段验证早停。
+    parser.add_argument("--early-stop", action=argparse.BooleanOptionalAction, default=False)
     # 至少训练多少局后，才允许基于阶段验证的早停判断生效。
     parser.add_argument("--min-episodes", type=int, default=15000)
     parser.add_argument("--validation-interval", type=int, default=1000)

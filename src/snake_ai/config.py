@@ -144,11 +144,11 @@ class EnvConfig:
 
 @dataclass(frozen=True)
 class TrainConfig:
-    episodes: int = 40000
+    episodes: int = 50000
     # reference profile 未显式覆盖时使用该单局步数上限；experiment8/experiment_ppo 默认不设上限。
     max_steps_per_episode: int | None = 500
     batch_size: int = 128
-    gamma: float = 0.99
+    gamma: float = 0.995
     # TD target 聚合的连续真实奖励步数；1 为传统 one-step DQN。
     n_step: int = 1
     learning_rate: float = 1e-4
