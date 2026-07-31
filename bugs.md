@@ -27,23 +27,4 @@ runs/<algorithm>_<timestamp>/
 其中 `latest.pt` 是最近一次模型快照，`best.pt` 由阶段验证选出。当前 checkpoint
 不包含 optimizer、replay/rollout buffer 和随机数状态，因此不能视为完整的断点续训文件。
 
-## Grid 模式训练缓慢
 
-**状态：旧实现问题；原诊断不再代表当前网络。**
-
-旧版本曾使用 19 维 Vector 状态、5 通道 Grid 状态和 `AdaptiveAvgPool2d`。严格
-deterministic CUDA 下，旧池化反向传播可能进入慢路径并产生
-`adaptive_avg_pool2d_backward_cuda` 警告。
-
-当前实现已经发生以下变化：
-
-- Vector 状态为 20 维；
-- Grid 状态为 `[9, height, width]`；
-- CNN 不再使用 `AdaptiveAvgPool2d`，全局特征直接保留完整 `H × W` 分辨率；
-- 局部分支默认裁剪蛇头周围 `3 × 3` 特征，可通过参数调整或关闭；
-- Grid 状态使用连续 `float32` NumPy 数组；
-- ReplayBuffer 使用固定容量结构，PER 使用 Sum Tree；
-- `--deterministic` 默认关闭，仅在需要严格复现时显式启用。
-
-当前性能问题应基于实际 GPU、棋盘尺寸、batch size 和 deterministic 开关重新测量，
-不能继续归因于已经移除的自适应池化。
