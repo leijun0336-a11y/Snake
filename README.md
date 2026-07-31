@@ -9,7 +9,9 @@ uv run --extra cpu snake-play
 ```
 
 > 这是游戏的唯一推荐启动命令。首次运行会自动安装项目依赖和 CPU 版 PyTorch，
-> 下载时间可能稍长；之后再次启动会直接复用已有环境。
+> 下载时间可能稍长。如果本地没有 AI 权重，游戏还会从公开的
+> `leijun0336-a11y/Snake` Hugging Face 仓库下载 `best.pt` 到
+> `checkpoints/dqn_20260728_140741/best.pt`；之后启动会直接复用本地环境和权重。
 
 
 ## 最新三 seed 实验结果

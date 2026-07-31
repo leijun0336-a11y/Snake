@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import random
+import sys
 from concurrent.futures import Future
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pygame
 import pytest
 
-from snake_ai.game.ai_profiles import DEFAULT_AI_ID, get_ai_profile
+from snake_ai.game.ai_profiles import DEFAULT_AI_ID, ensure_checkpoint, get_ai_profile
 from snake_ai.game.controllers import ControlContext, DQNController, HumanController
 from snake_ai.game.food_policy import SeededRaceFoodPolicy
 from snake_ai.game.game_app import AppScene, GameSettings, ModeName, SnakeGameApp
@@ -330,12 +332,64 @@ def test_default_ai_profile_strictly_loads_selected_checkpoint() -> None:
     action = controller.choose_action(ControlContext(env.reset(seed=1), env.direction))
 
     assert profile.checkpoint_path.name == "best.pt"
+    assert profile.id == "dqn_20260728_140741"
+    assert profile.huggingface_repo_id == "leijun0336-a11y/Snake"
     assert action in (0, 1, 2)
 
     viewer = AIViewerMode.create(profile, controller, seed=1, tick_rate=6)
     race = RaceMode.create(profile, controller, race_seed=1, tick_rate=6)
     assert viewer.ai_id == profile.id
     assert race.ai_id == profile.id
+
+
+def test_checkpoint_download_is_skipped_when_local_file_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint_path = Path("virtual-checkpoints/dqn_20260728_140741/best.pt")
+    profile = replace(get_ai_profile(DEFAULT_AI_ID), checkpoint_path=checkpoint_path)
+    fake_hub = SimpleNamespace(
+        hf_hub_download=lambda **kwargs: pytest.fail(f"unexpected download: {kwargs}")
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+
+    assert ensure_checkpoint(profile) == checkpoint_path
+
+
+def test_missing_checkpoint_is_downloaded_to_expected_local_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint_path = Path("virtual-checkpoints/dqn_20260728_140741/best.pt")
+    profile = replace(get_ai_profile(DEFAULT_AI_ID), checkpoint_path=checkpoint_path)
+    received: dict[str, object] = {}
+    mkdir_calls: list[tuple[Path, bool, bool]] = []
+    file_states = iter((False, True))
+
+    def fake_download(**kwargs: object) -> str:
+        received.update(kwargs)
+        return str(checkpoint_path)
+
+    monkeypatch.setattr(Path, "is_file", lambda self: next(file_states))
+    monkeypatch.setattr(
+        Path,
+        "mkdir",
+        lambda self, parents, exist_ok: mkdir_calls.append((self, parents, exist_ok)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(hf_hub_download=fake_download),
+    )
+
+    assert ensure_checkpoint(profile) == checkpoint_path
+    assert mkdir_calls == [(checkpoint_path.parent, True, True)]
+    assert received == {
+        "repo_id": "leijun0336-a11y/Snake",
+        "filename": "best.pt",
+        "revision": "main",
+        "local_dir": checkpoint_path.parent,
+        "token": False,
+    }
 
 
 def test_ai_profile_mismatch_is_rejected_without_fallback() -> None:

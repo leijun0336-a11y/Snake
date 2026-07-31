@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from snake_ai.agents import DQNAgent
-from snake_ai.game.ai_profiles import AIProfile
+from snake_ai.game.ai_profiles import AIProfile, ensure_checkpoint
 from snake_ai.game.snake_env import Direction, Observation, SnakeEnv
 
 
@@ -82,15 +82,14 @@ class DQNController:
     def load(cls, profile: AIProfile) -> DQNController:
         import torch
 
-        if not profile.checkpoint_path.is_file():
-            raise FileNotFoundError(f"AI checkpoint does not exist: {profile.checkpoint_path}")
+        checkpoint_path = ensure_checkpoint(profile)
         if profile.state_mode not in ("vector", "grid", "hybrid"):
             raise ValueError(f"Unsupported AI state mode: {profile.state_mode}")
 
-        checkpoint = torch.load(profile.checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
         run_config = checkpoint.get("run_config")
         if not isinstance(run_config, dict):
-            raise ValueError(f"AI checkpoint has no complete run_config: {profile.checkpoint_path}")
+            raise ValueError(f"AI checkpoint has no complete run_config: {checkpoint_path}")
         environment = run_config.get("environment")
         reward = run_config.get("reward")
         if not isinstance(environment, dict) or not isinstance(reward, dict):
@@ -125,7 +124,7 @@ class DQNController:
             auxiliary_size=SnakeEnv.state_size,
         )
         # load() performs strict state, mode, version and architecture checks.
-        agent.load(profile.checkpoint_path)
+        agent.load(checkpoint_path)
         return cls(profile, agent)
 
     def reset(self) -> None:
