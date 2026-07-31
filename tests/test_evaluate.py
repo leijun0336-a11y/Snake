@@ -22,6 +22,7 @@ def test_build_configs_resolves_evaluation_defaults(
     assert train_config.seed == 42
     assert env_config.width == 6
     assert env_config.height == 6
+    assert parse_args().no_render is True
 
 
 def test_build_configs_reads_board_size_from_checkpoint(
@@ -51,7 +52,7 @@ def test_build_configs_matches_environment_minimum_size(
         build_configs(parse_args())
 
 
-def test_find_latest_checkpoint_uses_latest_experiment_latest_pt(
+def test_find_latest_checkpoint_uses_latest_experiment_best_pt(
     tmp_path: Path,
 ) -> None:
     older = tmp_path / "dqn_20260101_000000"
@@ -62,7 +63,7 @@ def test_find_latest_checkpoint_uses_latest_experiment_latest_pt(
     (newer / "latest.pt").touch()
     (newer / "best.pt").touch()
 
-    assert find_latest_checkpoint(tmp_path) == newer / "latest.pt"
+    assert find_latest_checkpoint(tmp_path) == newer / "best.pt"
 
 
 def test_find_latest_checkpoint_compares_dqn_and_ppo_timestamps(tmp_path: Path) -> None:
@@ -70,11 +71,11 @@ def test_find_latest_checkpoint_compares_dqn_and_ppo_timestamps(tmp_path: Path) 
     ppo = tmp_path / "ppo_20260102_000000"
     dqn.mkdir()
     ppo.mkdir()
-    (dqn / "latest.pt").touch()
-    (ppo / "latest.pt").touch()
+    (dqn / "best.pt").touch()
+    (ppo / "best.pt").touch()
 
-    assert find_latest_checkpoint(tmp_path) == dqn / "latest.pt"
-    assert find_latest_checkpoint(tmp_path, algorithm="ppo") == ppo / "latest.pt"
+    assert find_latest_checkpoint(tmp_path) == dqn / "best.pt"
+    assert find_latest_checkpoint(tmp_path, algorithm="ppo") == ppo / "best.pt"
 
 
 def test_checkpoint_algorithm_defaults_legacy_checkpoint_to_dqn(tmp_path: Path) -> None:
@@ -89,13 +90,19 @@ def test_checkpoint_algorithm_defaults_legacy_checkpoint_to_dqn(tmp_path: Path) 
     assert get_checkpoint_algorithm(ppo) == "ppo"
 
 
-def test_find_latest_checkpoint_does_not_fallback_to_best_pt(tmp_path: Path) -> None:
+def test_find_latest_checkpoint_does_not_fallback_to_latest_pt(tmp_path: Path) -> None:
     latest_run = tmp_path / "dqn_20260102_000000"
     latest_run.mkdir()
-    (latest_run / "best.pt").touch()
+    (latest_run / "latest.pt").touch()
 
-    with pytest.raises(FileNotFoundError, match=r"No latest\.pt found"):
+    with pytest.raises(FileNotFoundError, match=r"No best\.pt found"):
         find_latest_checkpoint(tmp_path)
+
+
+def test_render_can_be_enabled_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["evaluate.py", "--render"])
+
+    assert parse_args().no_render is False
 
 
 def test_open_eval_metrics_csv_overwrites_previous_evaluation(tmp_path: Path) -> None:

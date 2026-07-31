@@ -1,5 +1,5 @@
 # 推荐运行方式：uv run --extra cpu python -m snake_ai.evaluate
-# 默认启用 Pygame 渲染；--no-render 关闭画面，--tensorboard 另行写入评估日志。
+# 默认关闭 Pygame 渲染；--render 显式开启画面，--tensorboard 另行写入评估日志。
 from __future__ import annotations
 
 import argparse
@@ -43,8 +43,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="use second/third-ranked actions when a PPO argmax policy repeats a state",
     )
-    # 不渲染，默认渲染。
-    parser.add_argument("--no-render", action="store_true")
+    # 默认不渲染；保留 --no-render 以兼容旧命令，--render 可显式开启画面。
+    render_group = parser.add_mutually_exclusive_group()
+    render_group.add_argument("--render", dest="no_render", action="store_false")
+    render_group.add_argument("--no-render", dest="no_render", action="store_true")
+    parser.set_defaults(no_render=True)
     parser.add_argument("--width", type=int, default=None)
     parser.add_argument("--height", type=int, default=None)
     parser.add_argument("--cell-size", type=int, default=EnvConfig.cell_size)
@@ -75,7 +78,7 @@ def find_latest_run_dir(runs_dir: Path = RUNS_DIR, algorithm: str | None = None)
     return max(run_dirs, key=_experiment_timestamp)
 
 
-# 默认读取最近一次实验目录中的 latest.pt；文件缺失时明确报错，不回退到 best.pt。
+# 默认读取最近一次实验目录中的 best.pt；文件缺失时明确报错。
 def find_latest_checkpoint(
     checkpoint_dir: Path = CHECKPOINT_DIR,
     algorithm: str | None = None,
@@ -88,10 +91,10 @@ def find_latest_checkpoint(
         raise FileNotFoundError(f"No checkpoint directory found in {checkpoint_dir}")
 
     latest_dir = max(checkpoint_dirs, key=_experiment_timestamp)
-    latest_checkpoint = latest_dir / "latest.pt"
-    if not latest_checkpoint.exists():
-        raise FileNotFoundError(f"No latest.pt found in latest checkpoint directory {latest_dir}")
-    return latest_checkpoint
+    best_checkpoint = latest_dir / "best.pt"
+    if not best_checkpoint.exists():
+        raise FileNotFoundError(f"No best.pt found in latest checkpoint directory {latest_dir}")
+    return best_checkpoint
 
 
 # 确定评估结果的tensorboard文件存储在哪个文件夹下。
@@ -227,7 +230,7 @@ def build_configs(
 
 def main() -> None:
     args = parse_args()
-    # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 latest.pt。
+    # 如果命令行没有指定 checkpoint，就默认评估最近一次训练的 best.pt。
     checkpoint_path = args.checkpoint or find_latest_checkpoint(algorithm=args.algorithm)
     train_config, env_config = build_configs(args, checkpoint_path)
     set_seed(train_config.seed)
@@ -266,7 +269,7 @@ def main() -> None:
     env = SnakeEnv(
         width=env_config.width,
         height=env_config.height,
-        # 默认开启渲染
+        # 默认关闭渲染，仅在显式传入 --render 时开启。
         render_mode=not args.no_render,
         # 一个格子的像素个数
         cell_size=env_config.cell_size,
