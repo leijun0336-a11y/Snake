@@ -1,4 +1,4 @@
-# 推荐运行方式：uv run --extra cpu python -m snake_ai.evaluate
+# 推荐运行方式：uv run --no-dev --extra cpu snake-evaluate
 # 默认关闭 Pygame 渲染；--render 显式开启画面，--tensorboard 另行写入评估日志。
 from __future__ import annotations
 

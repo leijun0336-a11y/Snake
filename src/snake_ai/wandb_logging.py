@@ -198,7 +198,7 @@ def start_wandb(
         import wandb
     except ImportError as exc:  # pragma: no cover - dependency is declared by the project
         raise RuntimeError(
-            "--wandb requires the project's W&B dependencies; run `uv sync`"
+            "--wandb requires the project's W&B dependencies; enable `--extra train`"
         ) from exc
 
     run = wandb.init(

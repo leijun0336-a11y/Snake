@@ -37,7 +37,7 @@ if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
     }
 }
 
-uv sync --inexact
+uv sync --no-dev --extra train --inexact
 
 # Also handle an existing .venv that cannot see system site packages yet.
 $VenvHasTorch = Test-TorchImport $VenvPython
@@ -50,7 +50,7 @@ if (-not $VenvHasTorch -and $SystemHasTorch) {
 $VenvHasCudaTorch = Test-CudaTorch $VenvPython
 if (-not $VenvHasCudaTorch) {
     Write-Host "CUDA PyTorch was not found; installing the cu124 build."
-    uv sync --extra cu124 --inexact
+    uv sync --no-dev --extra cu124 --extra train --inexact
 }
 
 & $VenvPython -c "import sys, torch; print(f'Using torch={torch.__version__}, cuda={torch.cuda.is_available()}'); sys.exit(0 if torch.cuda.is_available() else 'GPU PyTorch is required for training')"

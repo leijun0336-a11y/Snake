@@ -25,7 +25,7 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     fi
 fi
 
-uv sync --inexact
+uv sync --no-dev --extra train --inexact
 
 # 兼容已经存在、但尚未启用 system-site-packages 的 .venv。
 if ! "$VENV_PYTHON" -c 'import torch' >/dev/null 2>&1 \
@@ -39,7 +39,7 @@ if ! "$VENV_PYTHON" -c \
     'import sys, torch; sys.exit(0 if torch.cuda.is_available() else 1)' \
     >/dev/null 2>&1; then
     echo "CUDA PyTorch was not found; installing the cu124 build."
-    uv sync --extra cu124 --inexact
+    uv sync --no-dev --extra cu124 --extra train --inexact
 fi
 
 "$VENV_PYTHON" -c \

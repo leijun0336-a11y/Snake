@@ -5,21 +5,80 @@
 ## 🚀 快速启动游戏(需要安装uv)
 
 ```bash
-uv run --extra cpu snake-play
+uv run --no-dev --extra cpu snake-play
 ```
 
 > 这是游戏的唯一推荐启动命令。首次运行会自动安装项目依赖和 CPU 版 PyTorch，
-> 下载时间可能稍长。如果本地没有 AI 权重，游戏还会从公开的
+> 但不会安装训练、实验记录和开发工具。下载时间可能稍长。如果本地没有 AI 权重，游戏还会从公开的
 > `leijun0336-a11y/Snake` Hugging Face 仓库下载 `best.pt` 到
 > `checkpoints/dqn_20260728_140741/best.pt`；之后启动会直接复用本地环境和权重。
 
+如果当前激活的虚拟环境已经包含兼容的 CPU 或 CUDA PyTorch，可以直接复用，避免安装另一份：
+
+```bash
+uv run --active --no-dev snake-play
+```
+
+## 启动训练与评估
+
+### 推荐：脚本启动训练
+
+脚本会自动复用系统已安装的 CUDA PyTorch（缺失时才下载 cu124）、设置
+`CUBLAS_WORKSPACE_CONFIG` 保证训练可复现，并在训练前校验 GPU 可用性：
+
+```bash
+# Linux / AutoDL
+bash scripts/train_autodl.sh
+
+# Windows
+.\scripts\train_autodl.ps1
+```
+
+### 终端启动训练（替代方式）
+
+环境已就绪、想完全掌控安装过程时，直接用 uv 启动：
+
+```bash
+uv run --no-dev --extra cu124 --extra train snake-train
+```
+
+### 评估
+
+```bash
+# 普通 CPU 评估
+uv run --no-dev --extra cpu snake-evaluate
+
+# CUDA 12.4 评估
+uv run --no-dev --extra cu124 snake-evaluate
+
+# Linux 脚本评估
+bash scripts/evaluate.sh
+
+# Windows 脚本评估
+.\scripts\evaluate.ps1
+```
+
+### 自定义参数
+
+脚本和终端方式均可直接追加参数，例如：
+
+```bash
+bash scripts/train_autodl.sh --max-episodes 50000 --seed 42
+uv run --no-dev --extra cu124 --extra train snake-train --max-episodes 50000 --seed 42
+```
+
+可先使用 `--help` 查看完整参数：
+
+```bash
+uv run --no-dev --extra cu124 --extra train snake-train --help
+```
 
 ## 最新三 seed 实验结果
 
 以下图片汇总 `dqn_20260728_140741`、`dqn_20260728_140830` 和
 `dqn_20260728_140919`。曲线中的每个 episode 均按三个训练 seed 的对应数据取算术平均。
 
-显卡是RTX 3080 Ti单卡。三个实验(因为取了三个随机种子)并行训练，训练时长29小时39分16秒。
+显卡是RTX 3080 Ti单卡。三个实验 (因为取了三个随机种子) 并行训练，训练时长29小时39分16秒。
 
 ### 训练曲线
 

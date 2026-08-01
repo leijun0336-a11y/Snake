@@ -6,11 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "huggingface-hub>=0.30",
-    "matplotlib>=3.9",
     "numpy>=2.0",
     "pygame>=2.6",
-    "tensorboard>=2.17",
-    "wandb[workspaces]>=0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +16,10 @@ cpu = ["torch>=2.5"]
 # 当前 AutoDL 训练环境选择 `--extra cu124`；训练必须使用 GPU 版 PyTorch，
 # 并确认 `torch.cuda.is_available()` 为 True，不能用 cpu extra 进行训练。
 cu124 = ["torch==2.5.1"]
+train = [
+    "tensorboard>=2.17",
+    "wandb[workspaces]>=0.28.1",
+]
 
 [project.scripts]
 snake-train = "snake_ai.train:main"
