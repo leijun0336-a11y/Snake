@@ -19,6 +19,7 @@ from snake_ai.game.modes.ai_viewer import AIViewerMode
 from snake_ai.game.modes.race import RaceMode, RaceResult
 from snake_ai.game.session import GameSession
 from snake_ai.game.snake_env import Direction, Point, SnakeEnv
+from snake_ai.ui.audio import AudioManager
 
 
 class StraightController:
@@ -42,6 +43,23 @@ class SilentAudio:
 
     def play_finish(self) -> None:
         pass
+
+
+def test_audio_manager_falls_back_to_silent_when_mixer_init_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_mixer_init(**kwargs: object) -> None:
+        del kwargs
+        raise pygame.error("audio device unavailable")
+
+    monkeypatch.setattr(pygame.mixer, "init", fail_mixer_init)
+
+    audio = AudioManager()
+
+    assert audio.available is False
+    audio.play_click()
+    audio.play_eat()
+    audio.play_finish()
 
 
 def make_solo_app() -> SnakeGameApp:

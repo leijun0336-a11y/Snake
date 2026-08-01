@@ -13,11 +13,25 @@ class AudioManager:
     def __init__(self, enabled: bool = True) -> None:
         import pygame
 
-        pygame.mixer.init(frequency=self.SAMPLE_RATE, size=-16, channels=2)
         self.enabled = enabled
-        self._eat = self._tone(660.0, 0.07, 0.20)
-        self._finish = self._tone(220.0, 0.22, 0.24)
-        self._click = self._tone(440.0, 0.04, 0.12)
+        self._available = False
+        self._eat: object | None = None
+        self._finish: object | None = None
+        self._click: object | None = None
+
+        try:
+            pygame.mixer.init(frequency=self.SAMPLE_RATE, size=-16, channels=2)
+            self._eat = self._tone(660.0, 0.07, 0.20)
+            self._finish = self._tone(220.0, 0.22, 0.24)
+            self._click = self._tone(440.0, 0.04, 0.12)
+        except pygame.error:
+            return
+
+        self._available = True
+
+    @property
+    def available(self) -> bool:
+        return self._available
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
@@ -31,9 +45,16 @@ class AudioManager:
     def play_click(self) -> None:
         self._play(self._click)
 
-    def _play(self, sound: object) -> None:
-        if self.enabled:
+    def _play(self, sound: object | None) -> None:
+        if not self.enabled or not self._available or sound is None:
+            return
+
+        import pygame
+
+        try:
             sound.play()
+        except pygame.error:
+            self._available = False
 
     def _tone(self, frequency: float, duration: float, volume: float):
         import pygame
