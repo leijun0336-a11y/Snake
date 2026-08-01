@@ -159,6 +159,20 @@ def test_ai_start_uses_loading_scene_without_consuming_a_seed() -> None:
     assert app._seed == initial_seed
 
 
+def test_failed_ai_load_is_cleared_so_the_user_can_retry() -> None:
+    app = make_solo_app()
+    failed_load: Future[DQNController] = Future()
+    failed_load.set_exception(RuntimeError("network unavailable"))
+    app.ai_future = failed_load
+
+    app._start(ModeName.AI_VIEWER)
+
+    assert app.scene == AppScene.MENU
+    assert app.ai_future is None
+    assert app.pending_mode is None
+    assert app.error_message == "network unavailable"
+
+
 def test_game_over_scene_waits_two_seconds_before_result() -> None:
     app = SnakeGameApp.__new__(SnakeGameApp)
     app.scene = AppScene.GAME_OVER

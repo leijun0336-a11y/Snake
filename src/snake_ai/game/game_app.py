@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import Enum
+from threading import Thread
 
-from snake_ai.game.ai_profiles import DEFAULT_AI_ID, get_ai_profile
+from snake_ai.game.ai_profiles import AIProfile, DEFAULT_AI_ID, get_ai_profile
 from snake_ai.game.controllers import AIControllerRegistry, DQNController
 from snake_ai.game.modes import AIViewerMode, RaceMode, SoloMode
 from snake_ai.ui.audio import AudioManager
@@ -57,7 +58,6 @@ class SnakeGameApp:
         self.settings = GameSettings()
         self.audio = AudioManager(self.settings.sound_enabled)
         self.ai_registry = AIControllerRegistry()
-        self.ai_loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="snake-ai")
         self.ai_future: Future[DQNController] | None = None
         self.pending_mode: ModeName | None = None
         self.scene = AppScene.MENU
@@ -82,9 +82,9 @@ class SnakeGameApp:
                 self._update(dt)
                 self._draw(dt)
                 self.pygame.display.flip()
-                self._begin_ai_load()
         finally:
-            self.ai_loader.shutdown(wait=False, cancel_futures=True)
+            if self.ai_future is not None:
+                self.ai_future.cancel()
             self.pygame.quit()
 
     def _handle_event(self, event: object) -> None:
@@ -189,7 +189,28 @@ class SnakeGameApp:
     def _begin_ai_load(self) -> None:
         if self.ai_future is None:
             profile = get_ai_profile(DEFAULT_AI_ID)
-            self.ai_future = self.ai_loader.submit(self.ai_registry.get, profile)
+            future: Future[DQNController] = Future()
+            self.ai_future = future
+            Thread(
+                target=self._load_ai_controller,
+                args=(future, profile),
+                name="snake-ai-loader",
+                daemon=True,
+            ).start()
+
+    def _load_ai_controller(
+        self,
+        future: Future[DQNController],
+        profile: AIProfile,
+    ) -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            controller = self.ai_registry.get(profile)
+        except BaseException as exc:
+            future.set_exception(exc)
+        else:
+            future.set_result(controller)
 
     def _request_ai_controller(self, mode_name: ModeName) -> DQNController | None:
         self._begin_ai_load()
@@ -199,7 +220,11 @@ class SnakeGameApp:
             self.pending_mode = mode_name
             self.scene = AppScene.LOADING
             return None
-        return self.ai_future.result()
+        try:
+            return self.ai_future.result()
+        except Exception:
+            self.ai_future = None
+            raise
 
     def _start(self, mode_name: ModeName) -> None:
         self.error_message = ""
@@ -234,6 +259,7 @@ class SnakeGameApp:
                     raise ValueError(f"Unsupported game mode: {mode_name}")
         except (FileNotFoundError, KeyError, RuntimeError, ValueError) as exc:
             self.error_message = str(exc)
+            self.pending_mode = None
             self.scene = AppScene.MENU
             return
 
@@ -376,7 +402,7 @@ class SnakeGameApp:
         self.renderer.panel(pygame.Rect(self.WIDTH // 2 - 220, 265, 440, 180))
         dots = "." * (int(self.elapsed * 3) % 4)
         self.renderer.text(
-            f"LOADING AI{dots}",
+            f"LOADING SNAKE AI{dots}",
             (self.WIDTH // 2, 335),
             font=self.renderer.font_button,
             color=self.renderer.theme.ai,
