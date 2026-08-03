@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 from pathlib import Path
 from typing import Any, TextIO
+
+# PyTorch 确定性算法在 CUDA 10.2+ 的 cuBLAS 上需要在首次 GPU 运算前设置此变量。
+# setdefault 保留用户在外部显式指定的 :4096:8 或 :16:8。
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import torch
 

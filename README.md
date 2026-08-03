@@ -24,7 +24,7 @@ uv run --active --no-dev snake-play
 ### 推荐：脚本启动训练
 
 脚本会自动复用系统已安装的 CUDA PyTorch（缺失时才下载 cu124）、设置
-`CUBLAS_WORKSPACE_CONFIG` 保证训练可复现，并在训练前校验 GPU 可用性：
+`CUBLAS_WORKSPACE_CONFIG` 增强训练可复现性，并在训练前校验 GPU 可用性：
 
 ```bash
 # Linux / AutoDL
@@ -36,7 +36,7 @@ bash scripts/train_autodl.sh
 
 ### 终端启动训练（替代方式）
 
-环境已就绪、想完全掌控安装过程时，直接用 uv 启动：
+环境已就绪、想完全掌控安装过程时，直接用 uv 启动 (--extra cu124不是必须的)：
 
 ```bash
 uv run --no-dev --extra cu124 --extra train snake-train
@@ -44,18 +44,27 @@ uv run --no-dev --extra cu124 --extra train snake-train
 
 ### 评估
 
-```bash
-# 普通 CPU 评估
-uv run --no-dev --extra cpu snake-evaluate
+### 推荐：脚本启动评估
 
-# CUDA 12.4 评估
-uv run --no-dev --extra cu124 snake-evaluate
+```bash
 
 # Linux 脚本评估
 bash scripts/evaluate.sh
 
 # Windows 脚本评估
 .\scripts\evaluate.ps1
+```
+
+### 终端启动评估（替代方式）
+
+```bash
+
+# 普通 CPU 评估 (--extra cpu不是必须的)
+uv run --no-dev --extra cpu snake-evaluate
+
+# CUDA 12.4 评估 (--extra cu124不是必须的)
+uv run --no-dev --extra cu124 snake-evaluate
+
 ```
 
 ### 自定义参数
@@ -197,24 +206,6 @@ CNN 同时提取完整棋盘的全局特征和蛇头周围 `3 × 3` 的局部特
    Q(s,a) = V(s) + A(s,a) - mean(A(s,·))
    ```
 
-   ```mermaid
-   flowchart TB
-       BOARD["Board State<br/>9 × 6 × 6"] --> CNN["CNN Backbone"]
-       CNN --> GLOBAL["Global Features"]
-       CNN --> LOCAL["3 × 3 Local Features"]
-
-       GLOBAL --> FUSION["Feature Fusion"]
-       LOCAL --> FUSION
-       VECTOR["Vector Features<br/>20 values"] --> FUSION
-
-       FUSION --> FC["Fully Connected Layer<br/>256 units"]
-       FC --> VALUE["Value Stream<br/>V(s)"]
-       FC --> ADVANTAGE["Advantage Stream<br/>A(s,a)"]
-
-       VALUE --> COMBINE["Dueling Combination<br/>Q = V + A - mean(A)"]
-       ADVANTAGE --> COMBINE
-       COMBINE --> QVALUES["Three Q-values<br/>Straight | Right | Left"]
-       QVALUES --> ACTION["Choose the Highest Q-value"]
-   ```
+   ![Simplified architecture of the Hybrid Dueling Q-Network](docs/images/hybrid_dueling_q_network.png)
 
    *Figure: Simplified architecture of the Hybrid Dueling Q-Network.*

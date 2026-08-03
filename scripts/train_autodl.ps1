@@ -11,14 +11,6 @@ $SystemPython = if ($env:SNAKE_SYSTEM_PYTHON) {
     (Get-Command python -ErrorAction Stop).Source
 }
 
-function Test-TorchImport([string]$Python) {
-    if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
-        return $false
-    }
-    & $Python -c "import torch" *> $null
-    return $LASTEXITCODE -eq 0
-}
-
 function Test-CudaTorch([string]$Python) {
     if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
         return $false
@@ -27,26 +19,41 @@ function Test-CudaTorch([string]$Python) {
     return $LASTEXITCODE -eq 0
 }
 
-$SystemHasTorch = Test-TorchImport $SystemPython
+function Test-LocalTorch([string]$Python) {
+    if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
+        return $false
+    }
+    & $Python -c "import pathlib, sys, torch; prefix = pathlib.Path(sys.prefix).resolve(); torch_path = pathlib.Path(torch.__file__).resolve(); sys.exit(0 if torch_path.is_relative_to(prefix) else 1)" *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+$SystemHasCudaTorch = Test-CudaTorch $SystemPython
 
 # Let a new environment reuse an existing CUDA PyTorch installation.
 if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
-    if ($SystemHasTorch) {
-        Write-Host "Detected system PyTorch; creating .venv with system site packages."
+    if ($SystemHasCudaTorch) {
+        Write-Host "Detected system CUDA PyTorch; creating .venv with system site packages."
         uv venv --python $SystemPython --system-site-packages ".venv"
     }
 }
 
 uv sync --no-dev --extra train --inexact
 
-# Also handle an existing .venv that cannot see system site packages yet.
-$VenvHasTorch = Test-TorchImport $VenvPython
-if (-not $VenvHasTorch -and $SystemHasTorch) {
-    Write-Host "Detected system PyTorch; enabling system site packages for the existing .venv."
+# Reuse system CUDA PyTorch in an existing environment. Remove only a local
+# non-CUDA torch when it shadows the system CUDA build.
+$VenvHasCudaTorch = Test-CudaTorch $VenvPython
+if (-not $VenvHasCudaTorch -and $SystemHasCudaTorch) {
+    Write-Host "Detected system CUDA PyTorch; enabling system site packages for the existing .venv."
     uv venv --python $SystemPython --allow-existing --system-site-packages ".venv"
+
+    $VenvHasCudaTorch = Test-CudaTorch $VenvPython
+    if (-not $VenvHasCudaTorch -and (Test-LocalTorch $VenvPython)) {
+        Write-Host "Removing a non-CUDA torch from .venv because it shadows system CUDA PyTorch."
+        uv pip uninstall --python $VenvPython torch
+    }
 }
 
-# Training requires CUDA; a system CPU build still needs the cu124 extra.
+# CPU PyTorch does not satisfy or affect the training requirement.
 $VenvHasCudaTorch = Test-CudaTorch $VenvPython
 if (-not $VenvHasCudaTorch) {
     Write-Host "CUDA PyTorch was not found; installing the cu124 build."
