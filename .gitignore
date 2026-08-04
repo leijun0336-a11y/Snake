@@ -12,7 +12,9 @@ wheels/
 plan.md
 
 # Training artifacts
-checkpoints/
+checkpoints/*
+!checkpoints/dqn_20260728_140741/
+!checkpoints/dqn_20260728_140741/best.pt
 runs/
 
 

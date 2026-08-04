@@ -24,6 +24,8 @@ uv run --no-dev --extra cpu snake-play
 checkpoints/dqn_20260728_140741/best.pt
 ```
 
+仓库默认附带该权重（因为模型权重比较小），因此即使无法连接 Hugging Face，也可以直接运行 AI 模式。只有在本地文件缺失时，程序才会尝试从 Hugging Face 下载模型。
+
 之后会复用本地模型。单人模式不会触发模型下载；菜单中的 AI 观战和人机比赛模式会使用该模型。
 
 如果当前激活的虚拟环境已经包含兼容的 CPU 或 CUDA 版 PyTorch，可以复用该环境，避免安装另一份：
