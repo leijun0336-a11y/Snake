@@ -2,6 +2,12 @@
 
 一个基于 DQN 的贪吃蛇强化学习项目：可以直接运行训练好的 AI，也可以重新训练模型。项目同时提供 PPO 训练支持，但本文的实验结果和网络结构均基于 DQN。
 
+## 演示视频
+
+<video src="https://raw.githubusercontent.com/leijun0336-a11y/Snake/main/docs/video/Snake.mp4" controls width="720"></video>
+
+[打开演示视频](https://raw.githubusercontent.com/leijun0336-a11y/Snake/main/docs/video/Snake.mp4)
+
 ## 快速启动游戏
 
 需要安装 [uv](https://docs.astral.sh/uv/)，并使用 Python 3.12 或更高版本。
@@ -9,12 +15,6 @@
 ```bash
 uv run --no-dev --extra cpu snake-play
 ```
-
-### 演示视频
-
-<video src="https://raw.githubusercontent.com/leijun0336-a11y/Snake/main/docs/video/Snake.mp4" controls width="720"></video>
-
-[打开演示视频](https://raw.githubusercontent.com/leijun0336-a11y/Snake/main/docs/video/Snake.mp4)
 
 这是默认推荐的启动命令。首次运行时，uv 会安装项目依赖和 CPU 版 PyTorch，但不会安装训练、实验记录或开发工具；首次下载可能需要一些时间。
 
