@@ -10,6 +10,12 @@
 uv run --no-dev --extra cpu snake-play
 ```
 
+### 演示视频
+
+<video src="docs/video/Snake.mp4" controls width="720"></video>
+
+[打开演示视频](docs/video/Snake.mp4)
+
 这是默认推荐的启动命令。首次运行时，uv 会安装项目依赖和 CPU 版 PyTorch，但不会安装训练、实验记录或开发工具；首次下载可能需要一些时间。
 
 游戏启动后，只有在首次进入需要 AI 模型的模式时，才会检查模型文件。如果本地不存在模型，程序会从公开的 [Hugging Face 仓库](https://huggingface.co/leijun0336-a11y/Snake)下载 `best.pt`，保存到：
